@@ -173,13 +173,6 @@ ya_ot/
 
 **Поток:** `resolve_yandex_url` → `oid` → Playwright `goto tab=reviews` → `page.on('response')` ловит `fetchReviews` → человечный скролл `scroll__container` → сбор `parse_reviews_html` → дедуп `reviewId` → кэш SQLite → экспорт.
 
-## ⚠️ Важно
-
-- Не присылай картинки в чат — DeepSeek не видит, сессия упадёт
-- Только личное использование, паузы 2-5с + `limited` → 60с кулдаун
-- При `limited`/капча — `is_captcha_page` смотрит `visible` текст, не `captchapgrd` скрипт
-- Вёрстка Яндекс меняется — селекторы в `SELECTORS` с фолбэками
-
 ## 🛠 Стек
 
 FastAPI 0.115 + Gradio 4.44 + Playwright 1.45 (Chromium, `disable-blink-features`) + BeautifulSoup4 + pandas 2.2.3 + openpyxl + aiosqlite + loguru + fake-useragent
