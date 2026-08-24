@@ -1,0 +1,78 @@
+# ============================================
+# Yandex Reviews Scraper — gitignore
+# ============================================
+
+# Секреты (КРИТИЧНО!)
+.env
+.env.local
+.env.*.local
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Логи
+logs/
+*.log
+
+# База данных
+db/*.db
+db/*.sqlite
+db/*.sqlite3
+
+# Экспорты (слишком большие для git)
+output/
+exports/
+*.xlsx
+*.csv
+!output/.gitkeep
+
+# Playwright
+playwright-report/
+playwright/.cache/
+test-results/
+
+# Временные файлы
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Артефакты артефактов
+artifacts/
+
+# Кэш
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (если Context7 установлен локально)
+node_modules/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
