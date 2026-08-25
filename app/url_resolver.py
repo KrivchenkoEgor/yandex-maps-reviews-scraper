@@ -308,16 +308,24 @@ def resolve_yandex_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     params = extract_all_params(resolved_url)
     oid = params.pop("oid")  # oid выносим отдельно
 
-    # Нормализация mode=search с oid в пути (CTDqNYNS, CTDqqLJR): конвертируем в poi-карточку
-    # Иначе Playwright откроет страницу сети/поиска без fetchReviews для конкретного oid
     if oid is not None and params.get("mode") == "search":
         logger.info(f"mode=search с oid={oid} в пути — нормализую в poi-карточку")
-        resolved_url = f"https://yandex.ru/maps/?mode=poi&poi[uri]=ymapsbm1://org?oid={oid}&tab=reviews"
+        ll = params.get("ll")
+        z = params.get("z")
+        poi_point = params.get("poi_point")
+        parts = [f"mode=poi", f"poi[uri]=ymapsbm1://org?oid={oid}"]
+        if ll:
+            parts.append(f"ll={ll}")
+        if poi_point:
+            parts.append(f"poi[point]={poi_point}")
+        elif ll:
+            parts.append(f"poi[point]={ll}")
+        if z:
+            parts.append(f"z={z}")
+        parts.append("tab=reviews")
+        resolved_url = "https://yandex.ru/maps/?" + "&".join(parts)
         params["mode"] = "poi"
         params["poi_uri"] = f"ymapsbm1://org?oid={oid}"
-        # ensure tab уже есть
-        if "tab=reviews" not in resolved_url:
-            resolved_url = ensure_tab_reviews(resolved_url)
 
     if oid is None:
         logger.warning(f"OID не найден в URL: {resolved_url}")

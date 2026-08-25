@@ -201,7 +201,15 @@ class YandexScraper:
             page.on("response", lambda r: pending_api_tasks.append(asyncio.create_task(_api_handle(r))))
 
             await asyncio.sleep(random.uniform(1.0, 2.5))
-            await page.goto(target_url, wait_until="domcontentloaded")
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=config.YANDEX_PAGE_TIMEOUT_SEC * 1000)
+            except Exception as e:
+                if "Timeout" in str(e):
+                    logger.warning(f"goto timeout {config.YANDEX_PAGE_TIMEOUT_SEC}s для {target_url[:80]} — ретрай с 'commit' и паузой 3с")
+                    await asyncio.sleep(3)
+                    await page.goto(target_url, wait_until="commit", timeout=(config.YANDEX_PAGE_TIMEOUT_SEC + 15) * 1000)
+                else:
+                    raise
             try:
                 await page.wait_for_load_state("networkidle", timeout=8000)
             except Exception: pass
@@ -249,6 +257,7 @@ class YandexScraper:
             except Exception:
                 pass
 
+            dom_collected = False
             try:
                 reviews = await self._fetch_via_api(page, limit, api_collected)
                 if len(reviews) < 50:
@@ -256,9 +265,17 @@ class YandexScraper:
             except Exception as e:
                 logger.warning(f"API путь не сработал ({e}), фолбэк на DOM скролл")
                 reviews = await self._scroll_and_collect(page, limit)
-                # Мержим API и DOM по review_id, оставляя более полные данные
-                if api_collected:
-                    reviews = self._merge_reviews(api_collected, reviews, limit)
+                dom_collected = True
+
+            # Дождаться задач перехвата API ДО слияния и дедупликации:
+            # во время DOM-скролла fetchReviews продолжает приходить, и
+            # api_collected ещё может пополняться
+            if pending_api_tasks:
+                await asyncio.gather(*pending_api_tasks, return_exceptions=True)
+
+            # Слияние API и DOM по review_id — поле за полем, лучшие значения
+            if dom_collected and api_collected:
+                reviews = self._merge_reviews(api_collected, reviews, limit)
 
             html = await page.content()
             shop_info = parse_shop_info_html(html)
@@ -276,10 +293,6 @@ class YandexScraper:
                 "total_reviews": shop_info.get("total_reviews") or len(reviews),
                 "url": target_url,
             }
-
-            # Дождаться завершения всех задач перехвата API перед дедупликацией
-            if pending_api_tasks:
-                await asyncio.gather(*pending_api_tasks, return_exceptions=True)
 
             # Дедупликация по review_id
             seen: set[str] = set()
@@ -363,55 +376,58 @@ class YandexScraper:
 
     def _merge_reviews(self, api_reviews: list[dict], dom_reviews: list[dict], limit: int) -> list[dict]:
         """
-        Слить отзывы из API и DOM по review_id.
-        Для каждого ID оставляем более полную версию:
-        - длиннее текст
-        - больше фото
-        - is_verified из DOM (там надёжнее детектится через парсер)
+        Слить отзывы из API и DOM по review_id — поле за полем, а не выбором
+        одной версии целиком. Для каждого review_id:
+        - текст — из источника, где он длиннее (DOM полнее после «Ещё»);
+        - фото — из источника, где их больше (API отдаёт список сразу);
+        - ответ владельца / рейтинг / дата / автор — из источника, где поле заполнено;
+        - лайки — максимум из двух;
+        - is_verified — True, если хоть один источник нашёл бейдж (детект
+          в источниках разный, ложных True практически не бывает).
+
+        Отзывы без review_id из DOM добавляются как есть. Итог сортируется
+        по дате (новые сверху), чтобы порядок не зависел от источника.
         """
-        by_id: dict[str, dict] = {}
-        # Сначала API
-        for r in api_reviews:
-            rid = r.get("review_id")
-            if rid:
-                by_id[rid] = r
-        # Потом DOM — мержим, выбирая лучшее
-        for r in dom_reviews:
-            rid = r.get("review_id")
-            if not rid:
-                continue
-            if rid in by_id:
-                existing = by_id[rid]
-                # Выбираем версию с более длинным текстом
-                existing_text = existing.get("text") or ""
-                new_text = r.get("text") or ""
-                # Выбираем версию с большим количеством фото
-                existing_photos = len(existing.get("photos") or [])
-                new_photos = len(r.get("photos") or [])
-                # is_verified доверяем DOM (парсер ищет бейдж "Проверенный")
-                dom_verified = r.get("is_verified", False)
-                use_new = False
-                if len(new_text) > len(existing_text):
-                    use_new = True
-                elif len(new_text) == len(existing_text) and new_photos > existing_photos:
-                    use_new = True
-                if use_new:
-                    # Сохраняем is_verified из DOM если он True, иначе оставляем API
-                    merged = r.copy()
-                    if not merged.get("is_verified") and existing.get("is_verified"):
-                        merged["is_verified"] = existing["is_verified"]
-                    by_id[rid] = merged
+        by_id: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+
+        def _absorb(dst: dict[str, Any], src: dict[str, Any]) -> None:
+            """Дописать в dst более полные значения полей из src."""
+            if len(src.get("text") or "") > len(dst.get("text") or ""):
+                dst["text"] = src["text"]
+            if len(src.get("photos") or []) > len(dst.get("photos") or []):
+                dst["photos"] = src["photos"]
+            if src.get("owner_response") and not dst.get("owner_response"):
+                dst["owner_response"] = src["owner_response"]
+            if dst.get("rating") is None and src.get("rating") is not None:
+                dst["rating"] = src["rating"]
+            if (src.get("likes") or 0) > (dst.get("likes") or 0):
+                dst["likes"] = src["likes"]
+            if not dst.get("date") and src.get("date"):
+                dst["date"] = src["date"]
+                dst["raw_date"] = src.get("raw_date", "")
+            src_author = src.get("author") or ""
+            dst_author = dst.get("author") or ""
+            if src_author and src_author != "Аноним" and (not dst_author or dst_author == "Аноним"):
+                dst["author"] = src_author
+            if src.get("is_verified"):
+                dst["is_verified"] = True
+
+        for source in (api_reviews, dom_reviews):
+            for r in source:
+                rid = r.get("review_id")
+                if not rid:
+                    continue
+                if rid in by_id:
+                    _absorb(by_id[rid], r)
                 else:
-                    # Оставляем existing, но обновляем is_verified из DOM если True
-                    if dom_verified and not existing.get("is_verified"):
-                        existing["is_verified"] = True
-            else:
-                by_id[rid] = r
-        # Собираем результат
-        merged_list = list(by_id.values())
-        # Сортируем по дате (новые первые) если есть дата
-        merged_list.sort(key=lambda x: x.get("date") or "", reverse=True)
-        return merged_list[:limit]
+                    by_id[rid] = dict(r)
+                    order.append(rid)
+
+        merged = [by_id[rid] for rid in order]
+        merged += [dict(r) for r in dom_reviews if not r.get("review_id")]
+        merged.sort(key=lambda x: x.get("date") or "", reverse=True)
+        return merged[:limit]
 
     async def _scroll_and_collect(self, page: Page, limit: int) -> list[dict[str, Any]]:
         """Скролл с паузами и сбор отзывов после каждой итерации."""
