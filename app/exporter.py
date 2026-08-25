@@ -71,7 +71,7 @@ def _stats_sheet(reviews: list[dict[str, Any]]) -> pd.DataFrame:
 
     # топ позитив/негатив по длине текста
     sorted_by_text = sorted(reviews, key=lambda x: len(x.get("text") or ""), reverse=True)
-    top_text = sorted_by_text[0].get("text","")[:120] + "..." if sorted_by_text else ""
+    top_text = (sorted_by_text[0].get("text") or "")[:120] + "..." if sorted_by_text else ""
 
     data = [
         ["Всего отзывов", total],

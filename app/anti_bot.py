@@ -48,8 +48,6 @@ FALLBACK_USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
     # Yandex Browser 23.11 на Windows (на базе Chromium)
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 YaBrowser/23.11.0.0 Safari/537.36",
-    # Chrome 119 на Android (мобильный)
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
 ]
 
 # Популярные разрешения экрана для viewport рандомизации
@@ -138,19 +136,18 @@ class AntiBotConfig:
     @classmethod
     def from_env(cls) -> "AntiBotConfig":
         """
-        Создать конфиг из переменных окружения.
-
-        Returns:
-            Экземпляр AntiBotConfig с загруженными значениями.
+        Создать конфиг из переменных окружения (через app.config — единый источник).
         """
+        from app import config as app_config
+
         return cls(
-            min_delay_sec=float(os.getenv("YANDEX_MIN_DELAY_SEC", "2")),
-            max_delay_sec=float(os.getenv("YANDEX_MAX_DELAY_SEC", "5")),
-            max_retries=int(os.getenv("YANDEX_MAX_RETRIES", "3")),
-            retry_base_delay_sec=float(os.getenv("YANDEX_RETRY_BASE_DELAY_SEC", "2")),
-            page_timeout_sec=int(os.getenv("YANDEX_PAGE_TIMEOUT_SEC", "30")),
-            scroll_pause_sec=float(os.getenv("YANDEX_SCROLL_PAUSE_SEC", "3")),
-            max_scroll_attempts=int(os.getenv("YANDEX_MAX_SCROLL_ATTEMPTS", "5")),
+            min_delay_sec=float(app_config.YANDEX_MIN_DELAY_SEC),
+            max_delay_sec=float(app_config.YANDEX_MAX_DELAY_SEC),
+            max_retries=int(app_config.YANDEX_MAX_RETRIES),
+            retry_base_delay_sec=float(app_config.YANDEX_RETRY_BASE_DELAY_SEC),
+            page_timeout_sec=int(app_config.YANDEX_PAGE_TIMEOUT_SEC),
+            scroll_pause_sec=float(app_config.YANDEX_SCROLL_PAUSE_SEC),
+            max_scroll_attempts=int(app_config.YANDEX_MAX_SCROLL_ATTEMPTS),
         )
 
 
@@ -170,6 +167,20 @@ def get_config() -> AntiBotConfig:
 # User-Agent и Viewport
 # =============================================================================
 
+_ua_instance: Optional[UserAgent] = None
+
+
+def _get_ua() -> Optional[UserAgent]:
+    global _ua_instance
+    if _ua_instance is None:
+        try:
+            _ua_instance = UserAgent()
+        except Exception as e:
+            logger.warning(f"fake-useragent недоступен: {e}")
+            return None
+    return _ua_instance
+
+
 def get_random_user_agent() -> str:
     """
     Получить случайный User-Agent.
@@ -180,12 +191,13 @@ def get_random_user_agent() -> str:
     Returns:
         Строка User-Agent для использования в запросах.
     """
-    try:
-        ua = UserAgent()
-        return ua.random
-    except Exception as e:
-        logger.warning(f"fake-useragent недоступен: {e}, использую фоллбэк список")
-        return random.choice(FALLBACK_USER_AGENTS)
+    ua = _get_ua()
+    if ua is not None:
+        try:
+            return ua.random
+        except Exception as e:
+            logger.warning(f"fake-useragent random failed: {e}, использую фоллбэк")
+    return random.choice(FALLBACK_USER_AGENTS)
 
 
 def get_random_viewport() -> Tuple[int, int]:

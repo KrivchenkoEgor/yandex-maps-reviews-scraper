@@ -95,7 +95,7 @@ async def health():
 async def api_resolve(url: str):
     """Разрешение ссылки и извлечение oid без скрейпа (для отладки)."""
     try:
-        r = resolve_yandex_url(url)
+        r = await asyncio.to_thread(resolve_yandex_url, url)
         return r
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

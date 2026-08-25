@@ -10,7 +10,6 @@ ui — Gradio-интерфейс для Yandex Reviews Scraper.
 """
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +56,7 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
     if not url:
         raise ValueError("Вставьте ссылку на магазин с Яндекс.Карт")
 
-    resolved = resolve_yandex_url(url)
+    resolved = await asyncio.to_thread(resolve_yandex_url, url)
     oid = resolved["oid"]
     if not oid:
         raise ValueError("Не удалось извлечь OID. Убедитесь что ссылка ведёт на карточку магазина (с poi).")
@@ -65,30 +64,41 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
     db = get_db()
     await db.init()
 
-    # Кэш 24ч — если свежо, берём из БД
+    # Кэш 24ч — если свежо, берём из БД, но проверяем полноту выгрузки
     ttl = config.SHOP_CACHE_TTL_HOURS
     if await db.is_cache_fresh(oid, ttl_hours=ttl):
         shop = await db.get_shop(oid)
         reviews = await db.get_reviews(oid)
         if shop and reviews:
-            logger.info(f"Кэш HIT {oid}: {len(reviews)} отзывов")
-            return shop, reviews
+            total = shop.get("total_reviews") or 0
+            if total and len(reviews) < total * 0.9:
+                logger.info(f"Кэш неполный {oid}: {len(reviews)}/{total}, перезапрос")
+            else:
+                logger.info(f"Кэш HIT {oid}: {len(reviews)} отзывов")
+                return shop, reviews
 
-    # Скрапим
-    def _prog(msg: str):
-        if progress_cb:
-            progress_cb(msg)
-
-    scraper = YandexScraper(headless=True, on_progress=_prog)
-    result = await scraper.scrape(url)
-    shop = result["shop"]
-    reviews = result["reviews"]
-
-    # Сохраняем в БД
-    await db.upsert_shop(shop)
-    await db.upsert_reviews(oid, reviews)
+    # Скрапим — лог пишем ДО попытки, чтобы неудачи тоже фиксировались
     log_id = await db.log_start(oid)
-    await db.log_finish(log_id, reviews_found=len(reviews), status="ok")
+    try:
+        def _prog(msg: str):
+            if progress_cb:
+                progress_cb(msg)
+
+        scraper = YandexScraper(headless=True, on_progress=_prog)
+        result = await scraper.scrape(url)
+        shop = result["shop"]
+        reviews = result["reviews"]
+
+        # Сохраняем в БД
+        await db.upsert_shop(shop)
+        await db.upsert_reviews(oid, reviews)
+        await db.log_finish(log_id, reviews_found=len(reviews), status="ok")
+    except Exception as e:
+        try:
+            await db.log_finish(log_id, reviews_found=0, status="error", error=str(e))
+        except Exception:
+            pass
+        raise
 
     return shop, reviews
 
@@ -100,17 +110,20 @@ def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
         shop, reviews = asyncio.run(_scrape_one(url, progress_cb=lambda m: progress(0.5, desc=m)))
     except Exception as e:
         logger.error(f"Ошибка одиночного: {e}")
-        return f"❌ Ошибка: {e}", None, None, None, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        return (
+            f"❌ Ошибка: {e}",
+            None,
+            gr.update(value=None, visible=False),
+            gr.update(value=None, visible=False),
+            gr.update(value=None, visible=False),
+        )
 
     preview = _fmt_preview(shop, reviews)
-    # Готовим превью-таблицу для Gradio Dataframe (первые 5)
     df_preview = pd.DataFrame([
         {"Автор": r.get("author"), "Оценка": r.get("rating"), "Дата": r.get("date"), "Текст": (r.get("text") or "")[:120]}
         for r in reviews[:5]
     ])
 
-    # Сохраняем последние результаты в файлы сессии (для кнопок экспорта)
-    # Экспорты создаём сразу, чтобы кнопки отдавали файл
     try:
         p_xlsx = export_excel(shop, reviews)
         p_csv = export_csv(shop, reviews)
@@ -119,15 +132,12 @@ def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
         logger.error(f"Ошибка экспорта: {e}")
         p_xlsx = p_csv = p_json = None
 
-    # Сохраняем в gr.State через json — проще вернуть пути
     return (
         preview,
         df_preview,
-        str(p_xlsx) if p_xlsx else None,
-        str(p_csv) if p_csv else None,
-        str(p_json) if p_json else None,
-        gr.update(visible=True),
-        gr.update(visible=True),
+        gr.update(value=str(p_xlsx) if p_xlsx else None, visible=True),
+        gr.update(value=str(p_csv) if p_csv else None, visible=True),
+        gr.update(value=str(p_json) if p_json else None, visible=True),
     )
 
 
@@ -255,15 +265,15 @@ def build_ui() -> gr.Blocks:
             preview_md = gr.Markdown()
             preview_df = gr.Dataframe(label="Превью (5 отзывов)", interactive=False)
             with gr.Row():
-                dl_xlsx = gr.File(label="Excel (3 листа)")
-                dl_csv = gr.File(label="CSV")
-                dl_json = gr.File(label="JSON")
+                dl_xlsx = gr.File(label="Excel (3 листа)", visible=False)
+                dl_csv = gr.File(label="CSV", visible=False)
+                dl_json = gr.File(label="JSON", visible=False)
             gr.Markdown("💡 Кэш 24ч: повторный запрос в течение суток вернёт данные из БД без обращения к Яндексу. При капче — сервис попросит подождать.")
 
             btn.click(
                 handle_single,
                 inputs=[inp],
-                outputs=[preview_md, preview_df, dl_xlsx, dl_csv, dl_json, dl_xlsx, dl_csv],
+                outputs=[preview_md, preview_df, dl_xlsx, dl_csv, dl_json],
             )
 
         with gr.Tab("Пакетный"):

@@ -79,6 +79,8 @@ def _ensure_db(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     try:
+        con.execute("PRAGMA journal_mode=WAL;")
+        con.execute("PRAGMA busy_timeout=5000;")
         con.executescript(SCHEMA)
         con.commit()
     finally:
@@ -106,6 +108,8 @@ class Database:
     async def init(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA journal_mode=WAL;")
+            await db.execute("PRAGMA busy_timeout=5000;")
             await db.executescript(SCHEMA)
             await db.commit()
 
@@ -177,11 +181,11 @@ class Database:
             inserted = 0
             for row in rows:
                 try:
-                    await db.execute(
+                    cursor = await db.execute(
                         """INSERT OR IGNORE INTO reviews
                            (review_id,shop_oid,author,rating,date,text,photos,owner_response,likes,is_verified,scraped_at)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?)""", row)
-                    if db.total_changes:
+                    if cursor.rowcount > 0:
                         inserted += 1
                 except Exception as e:
                     logger.warning(f"Не удалось вставить отзыв {row[0]}: {e}")
@@ -243,6 +247,7 @@ class Database:
 
     async def log_start(self, shop_oid: str) -> int:
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA busy_timeout=5000;")
             cur = await db.execute(
                 "INSERT INTO scrape_log(shop_oid,started_at,status) VALUES(?,?,?)",
                 (shop_oid, datetime.now().isoformat(), "running"),
@@ -252,10 +257,18 @@ class Database:
 
     async def log_finish(self, log_id: int, reviews_found: int, status: str = "ok", error: Optional[str] = None) -> None:
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA busy_timeout=5000;")
             await db.execute(
                 "UPDATE scrape_log SET finished_at=?, reviews_found=?, status=?, error=? WHERE id=?",
                 (datetime.now().isoformat(), reviews_found, status, error, log_id),
             )
+            await db.commit()
+
+    async def touch_monitor(self, monitor_id: int) -> None:
+        """Обновить last_check мониторинга (вынесено из monitor.py)."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA busy_timeout=5000;")
+            await db.execute("UPDATE monitoring SET last_check=? WHERE id=?", (datetime.now().isoformat(), monitor_id))
             await db.commit()
 
 

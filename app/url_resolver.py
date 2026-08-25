@@ -52,19 +52,34 @@ class OidNotFoundError(UrlResolverError):
     pass
 
 
+_ua_instance: Optional[UserAgent] = None
+
+
+def _get_ua() -> Optional[UserAgent]:
+    global _ua_instance
+    if _ua_instance is None:
+        try:
+            _ua_instance = UserAgent()
+        except Exception as e:
+            logger.warning(f"fake-useragent недоступен: {e}")
+            return None
+    return _ua_instance
+
+
 def get_user_agent() -> str:
     """
     Получить случайный User-Agent.
 
     Сначала пытается использовать fake-useragent, при неудаче — фоллбэк список.
     """
-    try:
-        ua = UserAgent()
-        return ua.random
-    except Exception as e:
-        logger.warning(f"fake-useragent недоступен: {e}, использую фоллбэк")
-        import random
-        return random.choice(FALLBACK_USER_AGENTS)
+    ua = _get_ua()
+    if ua is not None:
+        try:
+            return ua.random
+        except Exception as e:
+            logger.warning(f"fake-useragent random failed: {e}, использую фоллбэк")
+    import random
+    return random.choice(FALLBACK_USER_AGENTS)
 
 
 def is_short_yandex_url(url: str) -> bool:

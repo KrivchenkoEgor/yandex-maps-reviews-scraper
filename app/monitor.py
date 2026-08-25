@@ -45,16 +45,10 @@ async def check_shop(shop_oid: str, shop_url: str, db: Database | None = None) -
     else:
         logger.info(f"Мониторинг {shop_oid}: новых нет ({len(fresh)} всего)")
 
-    # Обновляем last_check в monitoring
-    # Находим запись мониторинга для этого shop_oid
     monitors = await db.list_monitors(active_only=False)
     for m in monitors:
         if m["shop_oid"] == shop_oid:
-            # Обновляем last_check
-            import aiosqlite
-            async with aiosqlite.connect(db.path) as c:
-                await c.execute("UPDATE monitoring SET last_check=? WHERE id=?", (datetime.now().isoformat(), m["id"]))
-                await c.commit()
+            await db.touch_monitor(m["id"])
             break
 
     return {"new_reviews": len(new), "total": len(fresh), "shop": shop, "new_items": new}

@@ -324,7 +324,7 @@ def _get_photos(card: Tag) -> list[str]:
                             u = "https://yandex.ru" + u
                         if u.startswith("http") and "get-altay" in u and u not in urls:
                             urls.append(u)
-        except: continue
+        except Exception: continue
     # Дополнительно: любые background-image с get-altay по всей карточке
     try:
         for el in card.find_all(style=re.compile(r"url\(")):
@@ -337,7 +337,7 @@ def _get_photos(card: Tag) -> list[str]:
                     u = "https://yandex.ru" + u
                 if u.startswith("http") and "get-altay" in u and u not in urls:
                     urls.append(u)
-    except: pass
+    except Exception: pass
     # Резерв: ищем все URL с get-altay в сыром HTML карточки (на случай data-атрибутов)
     try:
         raw = str(card)
@@ -351,7 +351,7 @@ def _get_photos(card: Tag) -> list[str]:
             u = "https:" + m.group(0)
             if u not in urls:
                 urls.append(u)
-    except: pass
+    except Exception: pass
     return urls
 
 

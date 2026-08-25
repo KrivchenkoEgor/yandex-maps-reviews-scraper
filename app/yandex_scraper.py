@@ -138,7 +138,7 @@ class YandexScraper:
             }
         """
         limit = max_reviews or config.MAX_REVIEWS_PER_SHOP
-        resolved = resolve_yandex_url(url)
+        resolved = await asyncio.to_thread(resolve_yandex_url, url)
         oid = resolved["oid"]
         if not oid:
             raise ValueError(f"Не удалось извлечь oid из ссылки: {url}. Проверьте что ссылка ведёт на карточку организации.")
@@ -156,6 +156,7 @@ class YandexScraper:
         try:
             # API сбор — ставим ловушку ДО goto чтобы поймать page=1
             api_collected: list[dict[str, Any]] = []
+            pending_api_tasks: list[asyncio.Task] = []
 
             async def _api_handle(resp):
                 if "fetchReviews" in resp.url:
@@ -163,10 +164,25 @@ class YandexScraper:
                         j = await resp.json()
                         if "data" in j and "reviews" in j["data"]:
                             for r in j["data"]["reviews"]:
-                                photos = [p["urlTemplate"].replace("{size}", "S") for p in r.get("photos", [])]
+                                photos = [p["urlTemplate"].replace("{size}", "XL") for p in r.get("photos", [])]
                                 owner = None
                                 if r.get("businessComment"):
                                     owner = {"text": r["businessComment"]["text"], "date": r["businessComment"].get("updatedTime", "")[:10]}
+                                # Extract real verified status from API response
+                                # Check common fields: isVerified, verified, badges array
+                                is_verified = False
+                                if r.get("isVerified") is True:
+                                    is_verified = True
+                                elif r.get("verified") is True:
+                                    is_verified = True
+                                elif isinstance(r.get("badges"), list):
+                                    for badge in r["badges"]:
+                                        if isinstance(badge, dict) and badge.get("type") in ("verified", "isVerified", "verified_review"):
+                                            is_verified = True
+                                            break
+                                        if isinstance(badge, str) and badge.lower() in ("verified", "isverified", "verified_review"):
+                                            is_verified = True
+                                            break
                                 api_collected.append({
                                     "review_id": r.get("reviewId"),
                                     "author": r.get("author", {}).get("name", "Аноним"),
@@ -177,21 +193,39 @@ class YandexScraper:
                                     "photos": photos,
                                     "owner_response": owner,
                                     "likes": r.get("reactions", {}).get("likes", 0),
-                                    "is_verified": True,
+                                    "is_verified": is_verified,
                                 })
                     except Exception:
                         pass
 
-            page.on("response", lambda r: asyncio.create_task(_api_handle(r)))
+            page.on("response", lambda r: pending_api_tasks.append(asyncio.create_task(_api_handle(r))))
 
             await asyncio.sleep(random.uniform(1.0, 2.5))
             await page.goto(target_url, wait_until="domcontentloaded")
             try:
                 await page.wait_for_load_state("networkidle", timeout=8000)
-            except: pass
+            except Exception: pass
             await async_random_delay(2.5, 4.5)
-            if "limited" in (await page.content()).lower():
-                raise RuntimeError("limited")
+            # Проверка на "limited" с ретраями (60с кулдаун, до 2 повторов)
+            max_limited_retries = 2
+            for limited_attempt in range(max_limited_retries + 1):
+                content = await page.content()
+                if "limited" not in content.lower():
+                    break
+                if limited_attempt < max_limited_retries:
+                    logger.warning(
+                        f"Яндекс вернул заглушку 'limited' — лимит запросов, пауза 60с "
+                        f"(попытка {limited_attempt + 1}/{max_limited_retries})"
+                    )
+                    await asyncio.sleep(60)
+                    # Перезагружаем страницу после паузы
+                    await page.reload(wait_until="domcontentloaded")
+                    await async_random_delay(2.5, 4.5)
+                else:
+                    raise RuntimeError(
+                        "Яндекс вернул заглушку 'limited' — лимит запросов, пауза 60с. "
+                        "Повторите попытку позже или уменьшите частоту запросов."
+                    )
             if await is_captcha_page_playwright(page):
                 await handle_captcha(page, pause_sec=30)
 
@@ -222,26 +256,30 @@ class YandexScraper:
             except Exception as e:
                 logger.warning(f"API путь не сработал ({e}), фолбэк на DOM скролл")
                 reviews = await self._scroll_and_collect(page, limit)
-                # Мержим API и DOM если API что-то дал
-                if api_collected and len(reviews) < len(api_collected):
-                    reviews = api_collected[:limit]
+                # Мержим API и DOM по review_id, оставляя более полные данные
+                if api_collected:
+                    reviews = self._merge_reviews(api_collected, reviews, limit)
 
             html = await page.content()
             shop_info = parse_shop_info_html(html)
-            # Пытаемся взять имя из H1 (надёжнее хардкода "Магнит")
+            h1_name = ""
             try:
                 h1_name = await page.evaluate("() => document.querySelector('h1')?.innerText?.trim() || ''")
                 if h1_name and len(h1_name) < 80:
                     shop_info["name"] = h1_name
-            except: pass
+            except Exception: pass
             shop = {
                 "oid": oid,
-                "name": shop_info.get("name") or (h1_name if 'h1_name' in locals() and h1_name else "Магазин"),
+                "name": shop_info.get("name") or (h1_name if h1_name else "Магазин"),
                 "address": shop_info.get("address") or "",
                 "rating": shop_info.get("rating"),
                 "total_reviews": shop_info.get("total_reviews") or len(reviews),
                 "url": target_url,
             }
+
+            # Дождаться завершения всех задач перехвата API перед дедупликацией
+            if pending_api_tasks:
+                await asyncio.gather(*pending_api_tasks, return_exceptions=True)
 
             # Дедупликация по review_id
             seen: set[str] = set()
@@ -266,10 +304,12 @@ class YandexScraper:
     async def _fetch_via_api(self, page: Page, limit: int, collected: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prev_len = len(collected)
         empty_iters = 0
-        for _ in range(50):
+        max_scroll_attempts = config.YANDEX_MAX_SCROLL_ATTEMPTS
+        max_reviews_limit = config.MAX_REVIEWS_PER_SHOP
+        for _ in range(max_scroll_attempts):
             if len(collected) >= limit:
                 break
-            if len(collected) >= 5000:
+            if len(collected) >= max_reviews_limit:
                 break
             # Человечный скролл + мышь
             try:
@@ -280,7 +320,7 @@ class YandexScraper:
                     if random.random() < 0.5:
                         try:
                             await human_mouse_move(page)
-                        except: pass
+                        except Exception: pass
                 # Скролл контейнера
                 await page.evaluate("""() => {
                     const els=document.querySelectorAll('div[class*=\"scroll\"]');
@@ -296,8 +336,8 @@ class YandexScraper:
                             c = random.choice(cards[:10])
                             await c.hover()
                             await asyncio.sleep(random.uniform(0.5, 1.2))
-                    except: pass
-            except: pass
+                    except Exception: pass
+            except Exception: pass
             await asyncio.sleep(random.uniform(3.0, 4.5))
             if len(collected) == prev_len:
                 empty_iters += 1
@@ -308,7 +348,8 @@ class YandexScraper:
                 prev_len = len(collected)
             if len(collected) % 200 == 0 and len(collected) > 0 and len(collected) != prev_len:
                 self._progress(f"API: {len(collected)} отзывов...")
-        await asyncio.sleep(2)
+        # Небольшая пауза на случай, если какие-то ответы ещё в полёте
+        await asyncio.sleep(0.3)
         seen=set()
         uniq=[]
         for r in collected:
@@ -319,6 +360,58 @@ class YandexScraper:
         if not uniq:
             raise ValueError("API не вернул отзывы")
         return uniq[:limit]
+
+    def _merge_reviews(self, api_reviews: list[dict], dom_reviews: list[dict], limit: int) -> list[dict]:
+        """
+        Слить отзывы из API и DOM по review_id.
+        Для каждого ID оставляем более полную версию:
+        - длиннее текст
+        - больше фото
+        - is_verified из DOM (там надёжнее детектится через парсер)
+        """
+        by_id: dict[str, dict] = {}
+        # Сначала API
+        for r in api_reviews:
+            rid = r.get("review_id")
+            if rid:
+                by_id[rid] = r
+        # Потом DOM — мержим, выбирая лучшее
+        for r in dom_reviews:
+            rid = r.get("review_id")
+            if not rid:
+                continue
+            if rid in by_id:
+                existing = by_id[rid]
+                # Выбираем версию с более длинным текстом
+                existing_text = existing.get("text") or ""
+                new_text = r.get("text") or ""
+                # Выбираем версию с большим количеством фото
+                existing_photos = len(existing.get("photos") or [])
+                new_photos = len(r.get("photos") or [])
+                # is_verified доверяем DOM (парсер ищет бейдж "Проверенный")
+                dom_verified = r.get("is_verified", False)
+                use_new = False
+                if len(new_text) > len(existing_text):
+                    use_new = True
+                elif len(new_text) == len(existing_text) and new_photos > existing_photos:
+                    use_new = True
+                if use_new:
+                    # Сохраняем is_verified из DOM если он True, иначе оставляем API
+                    merged = r.copy()
+                    if not merged.get("is_verified") and existing.get("is_verified"):
+                        merged["is_verified"] = existing["is_verified"]
+                    by_id[rid] = merged
+                else:
+                    # Оставляем existing, но обновляем is_verified из DOM если True
+                    if dom_verified and not existing.get("is_verified"):
+                        existing["is_verified"] = True
+            else:
+                by_id[rid] = r
+        # Собираем результат
+        merged_list = list(by_id.values())
+        # Сортируем по дате (новые первые) если есть дата
+        merged_list.sort(key=lambda x: x.get("date") or "", reverse=True)
+        return merged_list[:limit]
 
     async def _scroll_and_collect(self, page: Page, limit: int) -> list[dict[str, Any]]:
         """Скролл с паузами и сбор отзывов после каждой итерации."""
@@ -366,7 +459,7 @@ class YandexScraper:
                     await asyncio.sleep(random.uniform(0.3, 0.8))
                     if random.random() < 0.4:
                         try: await human_mouse_move(page)
-                        except: pass
+                        except Exception: pass
                 if scroll_target == "body":
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 else:
@@ -456,7 +549,7 @@ class YandexScraper:
                 try:
                     await card.scroll_into_view_if_needed()
                     await asyncio.sleep(0.15)
-                except: pass
+                except Exception: pass
             html = await page.content()
             photo_batch = parse_reviews_html(html)
             by_id2 = {r.get("review_id"): r for r in photo_batch if r.get("review_id")}
@@ -477,7 +570,7 @@ class YandexScraper:
                         if cand and await cand.is_visible():
                             btn = cand
                             break
-                    except: continue
+                    except Exception: continue
                 if not btn:
                     break
                 self._progress("Кликаю «Показать ещё» для догрузки...")
