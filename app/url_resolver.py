@@ -128,6 +128,19 @@ def extract_oid(url: str) -> Optional[str]:
     if match:
         return match.group(1)
 
+    # 4. Фолбэк для mode=search: oid в пути /org/<name>/<id>/ (напр. CTDqNYNS -> /org/dobryanka/1275165507/)
+    #    Это же покрывает CTDqqLJR -> 85448204612 (chain businessId) и CTDqNYNS -> 1275165507 (тот же oid что у CTwDJ0if)
+    m = re.search(r"/org/[^/]+/(\d{8,16})(?:/|$|\?)", parsed.path)
+    if m:
+        return m.group(1)
+
+    # 5. Крайний фолбэк: любое длинное число 8-16 цифр в пути (организация)
+    m = re.search(r"/(\d{8,16})(?:/|$)", parsed.path)
+    if m:
+        cand = m.group(1)
+        # исключаем z/l порты типа 17, 10.32 — уже отфильтровано длиной
+        return cand
+
     return None
 
 
@@ -294,6 +307,17 @@ def resolve_yandex_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     # Извлекаем параметры
     params = extract_all_params(resolved_url)
     oid = params.pop("oid")  # oid выносим отдельно
+
+    # Нормализация mode=search с oid в пути (CTDqNYNS, CTDqqLJR): конвертируем в poi-карточку
+    # Иначе Playwright откроет страницу сети/поиска без fetchReviews для конкретного oid
+    if oid is not None and params.get("mode") == "search":
+        logger.info(f"mode=search с oid={oid} в пути — нормализую в poi-карточку")
+        resolved_url = f"https://yandex.ru/maps/?mode=poi&poi[uri]=ymapsbm1://org?oid={oid}&tab=reviews"
+        params["mode"] = "poi"
+        params["poi_uri"] = f"ymapsbm1://org?oid={oid}"
+        # ensure tab уже есть
+        if "tab=reviews" not in resolved_url:
+            resolved_url = ensure_tab_reviews(resolved_url)
 
     if oid is None:
         logger.warning(f"OID не найден в URL: {resolved_url}")
