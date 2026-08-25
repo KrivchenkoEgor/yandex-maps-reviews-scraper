@@ -154,14 +154,30 @@ class YandexScraper:
         page.set_default_timeout(config.YANDEX_PAGE_TIMEOUT_SEC * 1000)
 
         try:
-            # API сбор — ставим ловушку ДО goto чтобы поймать page=1
             api_collected: list[dict[str, Any]] = []
             pending_api_tasks: list[asyncio.Task] = []
+            api_total_count: list[int] = []
 
             async def _api_handle(resp):
                 if "fetchReviews" in resp.url:
                     try:
                         j = await resp.json()
+                        # capture total count for shop header (835 vs 300)
+                        try:
+                            data = j.get("data", {})
+                            cnt = None
+                            if isinstance(data.get("total"), int):
+                                cnt = data["total"]
+                            elif isinstance(data.get("count"), int):
+                                cnt = data["count"]
+                            elif isinstance(data.get("params"), dict) and isinstance(data["params"].get("count"), int):
+                                cnt = data["params"]["count"]
+                            elif isinstance(data.get("pagination"), dict) and isinstance(data["pagination"].get("total"), int):
+                                cnt = data["pagination"]["total"]
+                            if cnt:
+                                api_total_count.append(int(cnt))
+                        except Exception:
+                            pass
                         if "data" in j and "reviews" in j["data"]:
                             for r in j["data"]["reviews"]:
                                 photos = [p["urlTemplate"].replace("{size}", "XL") for p in r.get("photos", [])]
@@ -285,12 +301,14 @@ class YandexScraper:
                 if h1_name and len(h1_name) < 80:
                     shop_info["name"] = h1_name
             except Exception: pass
+            api_total = max(api_total_count) if api_total_count else None
+            total_reviews = api_total or shop_info.get("total_reviews") or len(reviews)
             shop = {
                 "oid": oid,
                 "name": shop_info.get("name") or (h1_name if h1_name else "Магазин"),
                 "address": shop_info.get("address") or "",
                 "rating": shop_info.get("rating"),
-                "total_reviews": shop_info.get("total_reviews") or len(reviews),
+                "total_reviews": total_reviews,
                 "url": target_url,
             }
 
@@ -317,7 +335,9 @@ class YandexScraper:
     async def _fetch_via_api(self, page: Page, limit: int, collected: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prev_len = len(collected)
         empty_iters = 0
-        max_scroll_attempts = config.YANDEX_MAX_SCROLL_ATTEMPTS
+        import math
+        needed = math.ceil(limit / 50) + 10
+        max_scroll_attempts = max(config.YANDEX_MAX_SCROLL_ATTEMPTS, min(needed, 50))
         max_reviews_limit = config.MAX_REVIEWS_PER_SHOP
         for _ in range(max_scroll_attempts):
             if len(collected) >= limit:
