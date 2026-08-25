@@ -163,6 +163,7 @@ ya_ot/
 │   ├── config.py            # .env → os.getenv
 │   ├── monitor.py           # check_all каждые 60 мин
 │   └── ui.py                # Gradio 3 вкладки
+├── tests/                   # pytest (review_parser, database, exporter, anti_bot) — 10 тестов
 ├── start.sh / stop.sh       # lsof -ti :8001, health, open
 ├── output/                  # Магнит_*.xlsx (222) / Добрянка_*.xlsx (600)
 ├── db/ya_ot.db              # 1659941740:222, 1275165507:600
