@@ -88,6 +88,9 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
         result = await scraper.scrape(url)
         shop = result["shop"]
         reviews = result["reviews"]
+        total = shop.get("total_reviews") or 0
+        if total and total > 100 and len(reviews) < total * 0.6 and len(reviews) < 600:
+            raise ValueError(f"Неполная выгрузка: {len(reviews)}/{total} — Яндекс отдал только часть отзывов, попробуйте позже")
 
         # Сохраняем в БД
         await db.upsert_shop(shop)
