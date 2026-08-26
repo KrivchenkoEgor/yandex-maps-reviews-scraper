@@ -60,6 +60,7 @@ temp/
 *.zip
 *.rar
 errors.md
+errors2.md
 
 # Артефакты артефактов
 artifacts/

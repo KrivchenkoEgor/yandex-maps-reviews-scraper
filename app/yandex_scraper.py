@@ -433,19 +433,59 @@ class YandexScraper:
             if src.get("is_verified"):
                 dst["is_verified"] = True
 
-        for source in (api_reviews, dom_reviews):
-            for r in source:
-                rid = r.get("review_id")
-                if not rid:
-                    continue
-                if rid in by_id:
-                    _absorb(by_id[rid], r)
-                else:
+        import re
+
+        def _norm_text(t: str) -> str:
+            return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+        def _key_text(t: str) -> str:
+            nt = _norm_text(t)
+            return nt[:60] if len(nt) > 60 else nt
+
+        for r in api_reviews:
+            rid = r.get("review_id")
+            if not rid:
+                continue
+            if rid in by_id:
+                _absorb(by_id[rid], r)
+            else:
+                by_id[rid] = dict(r)
+                order.append(rid)
+
+        text_to_rid: dict[str, str] = {}
+        for rid, rev in by_id.items():
+            kt = _key_text(rev.get("text") or "")
+            if kt:
+                text_to_rid[kt] = rid
+
+        for r in dom_reviews:
+            rid = r.get("review_id")
+            kt = _key_text(r.get("text") or "")
+            if kt and kt in text_to_rid:
+                existing_rid = text_to_rid[kt]
+                if existing_rid in by_id:
+                    _absorb(by_id[existing_rid], r)
+                continue
+            # if rid already exists, merge
+            if rid and rid in by_id:
+                _absorb(by_id[rid], r)
+                continue
+            if api_reviews and len(by_id) >= 10 and (not kt or len(kt) < 20):
+                continue
+            if rid:
+                if rid not in by_id:
                     by_id[rid] = dict(r)
                     order.append(rid)
+                    if kt:
+                        text_to_rid[kt] = rid
+            else:
+                if kt and kt not in text_to_rid:
+                    new_rid = f"txt:{kt[:40]}"
+                    by_id[new_rid] = dict(r)
+                    order.append(new_rid)
+                    text_to_rid[kt] = new_rid
 
         merged = [by_id[rid] for rid in order]
-        merged += [dict(r) for r in dom_reviews if not r.get("review_id")]
         merged.sort(key=lambda x: x.get("date") or "", reverse=True)
         return merged[:limit]
 
