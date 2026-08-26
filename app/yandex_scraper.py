@@ -161,7 +161,7 @@ class YandexScraper:
         Returns:
             {
               "shop": {name, address, rating, total_reviews, oid, url},
-              "reviews": [ {review_id, author, rating, date, text, photos, owner_response, likes, is_verified}, ... ],
+              "reviews": [ {review_id, author, rating, date, text, photos, owner_response, likes, dislikes, is_verified}, ... ],
               "resolved_url": str,
             }
         """
@@ -240,6 +240,7 @@ class YandexScraper:
                                     "photos": photos,
                                     "owner_response": owner,
                                     "likes": r.get("reactions", {}).get("likes", 0),
+                                    "dislikes": r.get("reactions", {}).get("dislikes", 0),
                                     "is_verified": is_verified,
                                 })
                     except Exception:
@@ -448,7 +449,7 @@ class YandexScraper:
         - текст — из источника, где он длиннее (DOM полнее после «Ещё»);
         - фото — из источника, где их больше (API отдаёт список сразу);
         - ответ владельца / рейтинг / дата / автор — из источника, где поле заполнено;
-        - лайки — максимум из двух;
+        - лайки/дизлайки — максимум из двух;
         - is_verified — True, если хоть один источник нашёл бейдж (детект
           в источниках разный, ложных True практически не бывает).
 
@@ -470,6 +471,8 @@ class YandexScraper:
                 dst["rating"] = src["rating"]
             if (src.get("likes") or 0) > (dst.get("likes") or 0):
                 dst["likes"] = src["likes"]
+            if (src.get("dislikes") or 0) > (dst.get("dislikes") or 0):
+                dst["dislikes"] = src["dislikes"]
             if not dst.get("date") and src.get("date"):
                 dst["date"] = src["date"]
                 dst["raw_date"] = src.get("raw_date", "")

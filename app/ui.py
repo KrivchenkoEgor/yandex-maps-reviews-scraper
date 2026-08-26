@@ -40,7 +40,7 @@ def _fmt_preview(shop: dict[str, Any], reviews: list[dict[str, Any]]) -> str:
     ]
     for i, r in enumerate(reviews[:5], 1):
         text = (r.get("text") or "")[:200].replace("\n", " ")
-        lines.append(f"{i}. **{r.get('author','Аноним')}** ({r.get('rating','—')}★, {r.get('date','')}) — {text}")
+        lines.append(f"{i}. **{r.get('author','Аноним')}** ({r.get('rating','—')}★, {r.get('date','')}) — {text} [👍{r.get('likes',0)} 👎{r.get('dislikes',0)}]")
         if r.get("owner_response"):
             lines.append(f"   ↳ Ответ: {(r['owner_response'].get('text') or '')[:120]}")
     return "\n".join(lines)
@@ -120,7 +120,7 @@ def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
 
     preview = _fmt_preview(shop, reviews)
     df_preview = pd.DataFrame([
-        {"Автор": r.get("author"), "Оценка": r.get("rating"), "Дата": r.get("date"), "Текст": (r.get("text") or "")[:120]}
+        {"Автор": r.get("author"), "Оценка": r.get("rating"), "Дата": r.get("date"), "Текст": (r.get("text") or "")[:120], "👍": r.get("likes",0), "👎": r.get("dislikes",0)}
         for r in reviews[:5]
     ])
 
@@ -178,7 +178,7 @@ def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
         try:
             shop, reviews = asyncio.run(_scrape_one(u))
             for r in reviews:
-                row = {"Магазин": shop.get("name"), "OID": shop.get("oid"), "Ссылка": u, **{f"Отзыв_{k}": v for k, v in r.items() if k in ("author","rating","date","text","likes","is_verified")}}
+                row = {"Магазин": shop.get("name"), "OID": shop.get("oid"), "Ссылка": u, **{f"Отзыв_{k}": v for k, v in r.items() if k in ("author","rating","date","text","likes","dislikes","is_verified")}}
                 all_reviews.append(row)
             shop_rows.append({"Ссылка": u, "Магазин": shop.get("name"), "OID": shop.get("oid"), "Отзывов": len(reviews), "Статус": "OK"})
         except Exception as e:

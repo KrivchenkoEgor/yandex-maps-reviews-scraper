@@ -87,6 +87,13 @@ SELECTORS = {
         "button[class*='like'] span",
         "span[class*='likes']",
     ],
+    # Дизлайки
+    "dislikes": [
+        "span.business-review-view__dislikes-count",
+        "button[class*='dislike'] span",
+        "span[class*='dislikes']",
+        "span.business-review-view__dislike-count",
+    ],
     # Проверенный отзыв — иконка/бейдж
     "verified": [
         "span:has-text('Проверенный')",
@@ -293,6 +300,16 @@ def _get_likes(el: Optional[Tag]) -> int:
     return 0
 
 
+def _get_dislikes(el: Optional[Tag]) -> int:
+    if el is None:
+        return 0
+    text = el.get_text(strip=True)
+    m = re.search(r"(\d+)", text)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
 def _get_photos(card: Tag) -> list[str]:
     urls: list[str] = []
     # Фото отзыва — get-altay / get-business-photos, аватарка — get-yapic (игнорируем)
@@ -375,7 +392,7 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
     Разобрать одну карточку отзыва (BeautifulSoup Tag) в dict.
 
     Возвращает ключи: review_id, author, rating, date, text, photos,
-    owner_response ({text, date}|None), likes, is_verified
+    owner_response ({text, date}|None), likes, dislikes, is_verified
     """
     review_id = card.get("data-review-id") or card.get("data-id") or card.get("id") or card.get("data-review_id") or ""
     if not review_id:
@@ -386,6 +403,7 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
             _get_text(_find_first(card, SELECTORS["date"])),
             str(_get_rating(_find_first(card, SELECTORS["rating"])) or ""),
             str(_get_likes(_find_first(card, SELECTORS["likes"])) or 0),
+            str(_get_dislikes(_find_first(card, SELECTORS["dislikes"])) or 0),
             str(len(_get_photos(card))),
         ])
         review_id = hashlib.md5(raw.encode()).hexdigest()[:12] if raw.strip("|") else ""
@@ -395,6 +413,7 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
     date_el = _find_first(card, SELECTORS["date"])
     text_el = _find_first(card, SELECTORS["text"])
     likes_el = _find_first(card, SELECTORS["likes"])
+    dislikes_el = _find_first(card, SELECTORS["dislikes"])
 
     # Ответ владельца — отдельный блок внутри карточки
     owner_block = _find_first(card, SELECTORS["owner_response"])
@@ -422,6 +441,7 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
         "photos": _get_photos(card),
         "owner_response": owner_response,
         "likes": _get_likes(likes_el),
+        "dislikes": _get_dislikes(dislikes_el),
         "is_verified": _is_verified(card),
     }
 

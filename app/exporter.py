@@ -50,6 +50,7 @@ def _reviews_to_df(reviews: list[dict[str, Any]]) -> pd.DataFrame:
             "Ответ владельца": (r.get("owner_response") or {}).get("text", "") if isinstance(r.get("owner_response"), dict) else (r.get("owner_response") or ""),
             "Дата ответа": (r.get("owner_response") or {}).get("date", "") if isinstance(r.get("owner_response"), dict) else "",
             "Лайки": r.get("likes", 0),
+            "Дизлайки": r.get("dislikes", 0),
             "Проверенный": "Да" if r.get("is_verified") else "Нет",
         })
     df = pd.DataFrame(rows)
@@ -157,7 +158,7 @@ def export_excel(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: 
                     ws.auto_filter.ref = ws.dimensions
                     ws.freeze_panes = "A2"
                     # Ширины колонок
-                    widths = {"ID": 14, "Автор": 18, "Рейтинг": 9, "Дата": 12, "Текст": 60, "Фото (кол-во)": 12, "Фото URL": 40, "Ответ владельца": 40, "Дата ответа": 12, "Лайки": 8, "Проверенный": 12}
+                    widths = {"ID": 14, "Автор": 18, "Рейтинг": 9, "Дата": 12, "Текст": 60, "Фото (кол-во)": 12, "Фото URL": 40, "Ответ владельца": 40, "Дата ответа": 12, "Лайки": 8, "Дизлайки": 9, "Проверенный": 12}
                     for idx, col_name in enumerate(df.columns, 1):
                         w = widths.get(col_name, 15)
                         ws.column_dimensions[get_column_letter(idx)].width = w
@@ -226,9 +227,9 @@ def export_json(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: s
 if __name__ == "__main__":
     demo_shop = {"oid": "1659941740", "name": "Тест Магнит", "address": "Красный проспект, 50", "rating": 4.3, "total_reviews": 247, "url": "https://yandex.ru/maps/-/CTwsUYyk"}
     demo_reviews = [
-        {"review_id": "a1", "author": "Иван П.", "rating": 5, "date": "2024-03-15", "text": "Отлично, свежие продукты", "photos": ["https://example.com/1.jpg"], "owner_response": {"text": "Спасибо!", "date": "2024-03-16"}, "likes": 12, "is_verified": True},
-        {"review_id": "a2", "author": "Мария С.", "rating": 2, "date": "2024-03-10", "text": "Очереди", "photos": [], "owner_response": None, "likes": 0, "is_verified": False},
-        {"review_id": "a3", "author": "Пётр", "rating": 4, "date": "2024-02-20", "text": "Норм", "photos": [], "owner_response": None, "likes": 3, "is_verified": True},
+        {"review_id": "a1", "author": "Иван П.", "rating": 5, "date": "2024-03-15", "text": "Отлично, свежие продукты", "photos": ["https://example.com/1.jpg"], "owner_response": {"text": "Спасибо!", "date": "2024-03-16"}, "likes": 12, "dislikes": 2, "is_verified": True},
+        {"review_id": "a2", "author": "Мария С.", "rating": 2, "date": "2024-03-10", "text": "Очереди", "photos": [], "owner_response": None, "likes": 0, "dislikes": 1, "is_verified": False},
+        {"review_id": "a3", "author": "Пётр", "rating": 4, "date": "2024-02-20", "text": "Норм", "photos": [], "owner_response": None, "likes": 3, "dislikes": 0, "is_verified": True},
     ]
     p1 = export_excel(demo_shop, demo_reviews, filename="demo_test.xlsx")
     p2 = export_csv(demo_shop, demo_reviews, filename="demo_test.csv")
