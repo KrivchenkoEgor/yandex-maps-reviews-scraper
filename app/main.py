@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from app import config
+from app import __git_url__, __version__, config
 from app.database import get_db
 from app.exporter import export_csv, export_excel, export_json
 from app.ui import _scrape_one  # переиспользуем логику одиночного
@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     logger.info("Приложение остановлено")
 
 
-app = FastAPI(title="Yandex Reviews Scraper", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Yandex Reviews Scraper", version=__version__, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ app = FastAPI(title="Yandex Reviews Scraper", version="0.1.0", lifespan=lifespan
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": __version__, "git": __git_url__}
 
 
 @app.get("/api/resolve")

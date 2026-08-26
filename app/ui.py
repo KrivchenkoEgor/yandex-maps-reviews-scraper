@@ -17,7 +17,7 @@ import gradio as gr
 import pandas as pd
 from loguru import logger
 
-from app import config
+from app import __git_url__, __version__, config
 from app.database import get_db
 from app.exporter import export_csv, export_excel, export_json
 from app.url_resolver import resolve_yandex_url
@@ -298,6 +298,12 @@ def build_ui() -> gr.Blocks:
             mon_add.click(handle_monitor_add, inputs=[mon_url, mon_interval], outputs=[mon_status])
             mon_refresh.click(handle_monitor_list, outputs=[mon_table])
             demo.load(handle_monitor_list, outputs=[mon_table])
+
+        gr.Markdown(
+            f"<div style='text-align:center; margin-top:20px; opacity:0.7; font-size:13px'>"
+            f"v{__version__} • <a href='{__git_url__}' target='_blank'>GitHub</a> • "
+            f"Yandex Reviews Scraper</div>"
+        )
 
     return demo
 
