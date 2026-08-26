@@ -120,15 +120,43 @@ class YandexScraper:
         except Exception:
             pass
 
+    async def _select_ranking(self, page: Page, ranking: str) -> None:
+        if not ranking or ranking == "by_relevance_org":
+            return
+        mapping = {
+            "by_time": "По новизне",
+            "by_rating_desc": "Сначала положительные",
+            "by_rating_asc": "Сначала отрицательные",
+        }
+        label = mapping.get(ranking)
+        if not label:
+            return
+        try:
+            loc = page.locator("text=По умолчанию").first
+            if await loc.count() == 0:
+                return
+            await loc.click()
+            await asyncio.sleep(1.5)
+            loc2 = page.locator(f"text={label}").first
+            if await loc2.count() == 0:
+                return
+            await loc2.click()
+            await asyncio.sleep(3.5)
+        except Exception:
+            pass
+
     # -- core --
 
-    async def scrape(self, url: str, max_reviews: Optional[int] = None) -> dict[str, Any]:
+    async def scrape(self, url: str, max_reviews: Optional[int] = None, ranking: Optional[str] = None) -> dict[str, Any]:
         """
         Скачать все отзывы по ссылке на магазин.
 
         Args:
             url: короткая или полная ссылка Яндекс.Карт
             max_reviews: лимит отзывов (по умолчанию из config.MAX_REVIEWS_PER_SHOP)
+            ranking: сортировка отзывов: None/by_relevance_org (по умолчанию, релевантность),
+                     "by_time" (по новизне — 600 последних), "by_rating_asc/desc" и т.д.
+                     Если указано, кликает UI "По умолчанию/По новизне" перед скроллом.
 
         Returns:
             {
@@ -137,6 +165,9 @@ class YandexScraper:
               "resolved_url": str,
             }
         """
+        # env-флаг для 600 последних без изменения вызова: YANDEX_RANKING=by_time
+        if ranking is None:
+            ranking = ( __import__("os").getenv("YANDEX_RANKING") or "" ).strip() or None
         limit = max_reviews or config.MAX_REVIEWS_PER_SHOP
         resolved = await asyncio.to_thread(resolve_yandex_url, url)
         oid = resolved["oid"]
@@ -272,6 +303,22 @@ class YandexScraper:
                 await human_mouse_move(page)
             except Exception:
                 pass
+
+            if ranking and ranking != "by_relevance_org":
+                try:
+                    api_collected.clear()
+                    api_total_count.clear()
+                    if pending_api_tasks:
+                        try:
+                            await asyncio.gather(*pending_api_tasks, return_exceptions=True)
+                        except Exception:
+                            pass
+                        pending_api_tasks.clear()
+                    await self._select_ranking(page, ranking)
+                    self._progress(f"Ранкинг {ranking} выбран")
+                    await asyncio.sleep(1.5)
+                except Exception:
+                    pass
 
             dom_collected = False
             try:
@@ -701,7 +748,7 @@ class YandexScraper:
 # Удобная синхронная обёртка для вызова из Gradio (запускает asyncio)
 # ---------------------------------------------------------------------------
 
-def scrape_sync(url: str, max_reviews: Optional[int] = None, headless: bool = True, on_progress: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
+def scrape_sync(url: str, max_reviews: Optional[int] = None, headless: bool = True, on_progress: Optional[Callable[[str], None]] = None, ranking: Optional[str] = None) -> dict[str, Any]:
     """Синхронная обёртка над YandexScraper.scrape (для Gradio/BG tasks)."""
     scraper = YandexScraper(headless=headless, on_progress=on_progress)
-    return asyncio.run(scraper.scrape(url, max_reviews=max_reviews))
+    return asyncio.run(scraper.scrape(url, max_reviews=max_reviews, ranking=ranking))
