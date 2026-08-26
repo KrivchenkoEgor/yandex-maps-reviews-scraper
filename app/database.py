@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     photos TEXT,              -- JSON-массив
     owner_response TEXT,       -- JSON {"text","date"}
     likes INTEGER DEFAULT 0,
+    dislikes INTEGER DEFAULT 0,
     is_verified INTEGER DEFAULT 0,
     scraped_at TEXT,
     FOREIGN KEY(shop_oid) REFERENCES shops(oid) ON DELETE CASCADE
@@ -82,6 +83,10 @@ def _ensure_db(path: str) -> None:
         con.execute("PRAGMA journal_mode=WAL;")
         con.execute("PRAGMA busy_timeout=5000;")
         con.executescript(SCHEMA)
+        try:
+            con.execute("ALTER TABLE reviews ADD COLUMN dislikes INTEGER DEFAULT 0")
+        except Exception:
+            pass
         con.commit()
     finally:
         con.close()
@@ -111,6 +116,10 @@ class Database:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA busy_timeout=5000;")
             await db.executescript(SCHEMA)
+            try:
+                await db.execute("ALTER TABLE reviews ADD COLUMN dislikes INTEGER DEFAULT 0")
+            except Exception:
+                pass
             await db.commit()
 
     # -- shops --
@@ -174,6 +183,7 @@ class Database:
                 json.dumps(r.get("photos", []), ensure_ascii=False),
                 json.dumps(r.get("owner_response"), ensure_ascii=False) if r.get("owner_response") else None,
                 r.get("likes", 0),
+                r.get("dislikes", 0),
                 1 if r.get("is_verified") else 0,
                 now,
             ))
@@ -183,8 +193,8 @@ class Database:
                 try:
                     cursor = await db.execute(
                         """INSERT OR IGNORE INTO reviews
-                           (review_id,shop_oid,author,rating,date,text,photos,owner_response,likes,is_verified,scraped_at)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?)""", row)
+                           (review_id,shop_oid,author,rating,date,text,photos,owner_response,likes,dislikes,is_verified,scraped_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", row)
                     if cursor.rowcount > 0:
                         inserted += 1
                 except Exception as e:
