@@ -36,9 +36,8 @@ logs/
 *.log
 
 # База данных
-db/*.db
-db/*.sqlite
-db/*.sqlite3
+db/
+!db/.gitkeep
 
 # Экспорты (слишком большие для git)
 output/
@@ -62,6 +61,7 @@ temp/
 errors.md
 errors2.md
 errors3.md
+REPORT*.md
 
 # Артефакты артефактов
 artifacts/
