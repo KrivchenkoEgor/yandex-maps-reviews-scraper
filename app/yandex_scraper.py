@@ -89,7 +89,7 @@ class YandexScraper:
             viewport={"width": vw[0], "height": vw[1]},
             locale="ru-RU",
             timezone_id="Asia/Novosibirsk",
-            has_touch=random.choice([True, False]),
+            has_touch=False,
             is_mobile=False,
             color_scheme="light",
         )
@@ -120,9 +120,9 @@ class YandexScraper:
         except Exception:
             pass
 
-    async def _select_ranking(self, page: Page, ranking: str) -> None:
+    async def _select_ranking(self, page: Page, ranking: str) -> bool:
         if not ranking or ranking == "by_relevance_org":
-            return
+            return True
         mapping = {
             "by_time": "По новизне",
             "by_rating_desc": "Сначала положительные",
@@ -130,20 +130,24 @@ class YandexScraper:
         }
         label = mapping.get(ranking)
         if not label:
-            return
+            return False
         try:
             loc = page.locator("text=По умолчанию").first
             if await loc.count() == 0:
-                return
+                logger.warning(f"Ранкинг {ranking}: не найден 'По умолчанию'")
+                return False
             await loc.click()
             await asyncio.sleep(1.5)
             loc2 = page.locator(f"text={label}").first
             if await loc2.count() == 0:
-                return
+                logger.warning(f"Ранкинг {ranking}: не найден '{label}'")
+                return False
             await loc2.click()
             await asyncio.sleep(3.5)
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            logger.warning(f"Ранкинг {ranking} не переключился: {e}")
+            return False
 
     # -- core --
 
@@ -167,7 +171,8 @@ class YandexScraper:
         """
         # env-флаг для 600 последних без изменения вызова: YANDEX_RANKING=by_time
         if ranking is None:
-            ranking = ( __import__("os").getenv("YANDEX_RANKING") or "" ).strip() or None
+            import os as _os
+            ranking = (_os.getenv("YANDEX_RANKING") or "").strip() or None
         limit = max_reviews or config.MAX_REVIEWS_PER_SHOP
         resolved = await asyncio.to_thread(resolve_yandex_url, url)
         oid = resolved["oid"]
@@ -315,11 +320,16 @@ class YandexScraper:
                         except Exception:
                             pass
                         pending_api_tasks.clear()
-                    await self._select_ranking(page, ranking)
-                    self._progress(f"Ранкинг {ranking} выбран")
+                    ok = await self._select_ranking(page, ranking)
+                    if ok:
+                        self._progress(f"Ранкинг {ranking} выбран")
+                    else:
+                        self._progress(f"⚠️ Ранкинг {ranking} не переключился — используется по умолчанию")
+                        logger.warning(f"Ранкинг {ranking} не переключился")
                     await asyncio.sleep(1.5)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Ранкинг {ranking} ошибка: {e}")
+                    self._progress(f"⚠️ Ранкинг {ranking} не переключился — используется по умолчанию")
 
             dom_collected = False
             try:
@@ -385,7 +395,7 @@ class YandexScraper:
         empty_iters = 0
         import math
         needed = math.ceil(limit / 50) + 10
-        max_scroll_attempts = max(config.YANDEX_MAX_SCROLL_ATTEMPTS, min(needed, 50))
+        max_scroll_attempts = max(config.YANDEX_MAX_SCROLL_ATTEMPTS, min(needed, 200))
         max_reviews_limit = config.MAX_REVIEWS_PER_SHOP
         for _ in range(max_scroll_attempts):
             if len(collected) >= limit:
@@ -420,6 +430,8 @@ class YandexScraper:
                     except Exception: pass
             except Exception: pass
             await asyncio.sleep(random.uniform(3.0, 4.5))
+            if len(collected) % 200 == 0 and len(collected) > 0 and len(collected) != prev_len:
+                self._progress(f"API: {len(collected)} отзывов...")
             if len(collected) == prev_len:
                 empty_iters += 1
                 if empty_iters >= 4:
@@ -427,8 +439,6 @@ class YandexScraper:
             else:
                 empty_iters = 0
                 prev_len = len(collected)
-            if len(collected) % 200 == 0 and len(collected) > 0 and len(collected) != prev_len:
-                self._progress(f"API: {len(collected)} отзывов...")
         # Небольшая пауза на случай, если какие-то ответы ещё в полёте
         await asyncio.sleep(0.3)
         seen=set()
@@ -520,7 +530,7 @@ class YandexScraper:
             if rid and rid in by_id:
                 _absorb(by_id[rid], r)
                 continue
-            if api_reviews and len(by_id) >= 10 and (not kt or len(kt) < 20):
+            if api_reviews and len(by_id) >= 10 and not kt:
                 continue
             if rid:
                 if rid not in by_id:

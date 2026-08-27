@@ -61,6 +61,7 @@ temp/
 *.rar
 errors.md
 errors2.md
+errors3.md
 
 # Артефакты артефактов
 artifacts/
@@ -71,6 +72,9 @@ artifacts/
 .mypy_cache/
 .ruff_cache/
 .omo/
+
+# Эксперименты (сетевые прогонщики с хардкодом)
+experiment/
 
 # Node (если Context7 установлен локально)
 node_modules/

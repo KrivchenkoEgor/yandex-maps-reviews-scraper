@@ -45,7 +45,6 @@ YANDEX_MAX_SCROLL_ATTEMPTS = _int("YANDEX_MAX_SCROLL_ATTEMPTS", 5)
 # --- БД и кэш ---
 DATABASE_PATH = os.getenv("DATABASE_PATH", "db/ya_ot.db")
 SHOP_CACHE_TTL_HOURS = _int("SHOP_CACHE_TTL_HOURS", 24)
-REVIEW_CACHE_TTL_HOURS = _int("REVIEW_CACHE_TTL_HOURS", 1)
 
 # --- Приложение ---
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
@@ -60,7 +59,6 @@ LOG_RETENTION = os.getenv("LOG_RETENTION", "30 days")
 
 # --- Экспорт ---
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
-DEFAULT_EXPORT_FORMAT = os.getenv("DEFAULT_EXPORT_FORMAT", "xlsx")
 
 # --- Мониторинг ---
 MONITOR_DEFAULT_INTERVAL_HOURS = _int("MONITOR_DEFAULT_INTERVAL_HOURS", 24)
@@ -68,7 +66,3 @@ MONITOR_CHECK_INTERVAL_MINUTES = _int("MONITOR_CHECK_INTERVAL_MINUTES", 60)
 
 # --- Ограничения ---
 MAX_REVIEWS_PER_SHOP = _int("MAX_REVIEWS_PER_SHOP", 10000)
-MAX_CONCURRENT_SHOPS = _int("MAX_CONCURRENT_SHOPS", 1)
-
-# --- User-Agent ---
-USER_AGENT_FILE = os.getenv("USER_AGENT_FILE", "")

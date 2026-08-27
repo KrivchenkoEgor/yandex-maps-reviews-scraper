@@ -37,9 +37,8 @@ async def check_shop(shop_oid: str, shop_url: str, db: Database | None = None) -
     existing_ids = {r["review_id"] for r in existing if r.get("review_id")}
     new = [r for r in fresh if r.get("review_id") not in existing_ids]
 
+    await db.upsert_shop(shop)
     if new:
-        # Обновляем магазин и добавляем только новые
-        await db.upsert_shop(shop)
         added = await db.upsert_reviews(shop_oid, new)
         logger.info(f"Мониторинг {shop_oid}: {added} новых из {len(fresh)}")
     else:

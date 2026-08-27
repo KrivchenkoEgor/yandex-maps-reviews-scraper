@@ -10,6 +10,8 @@ ui — Gradio-интерфейс для Yandex Reviews Scraper.
 """
 
 import asyncio
+import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +32,16 @@ from app.yandex_scraper import YandexScraper
 def _fmt_preview(shop: dict[str, Any], reviews: list[dict[str, Any]]) -> str:
     if not shop:
         return "Нет данных"
+    warning = shop.get("_partial_warning")
     lines = [
         f"**{shop.get('name','—')}**",
         f"Адрес: {shop.get('address','—')}",
         f"Рейтинг: {shop.get('rating','—')} | Всего отзывов: {shop.get('total_reviews','—')} | OID: {shop.get('oid','—')}",
         f"Скачано отзывов: {len(reviews)}",
-        "",
-        "Первые 5 отзывов:",
     ]
+    if warning:
+        lines.append(warning)
+    lines += ["", "Первые 5 отзывов:"]
     for i, r in enumerate(reviews[:5], 1):
         text = (r.get("text") or "")[:200].replace("\n", " ")
         lines.append(f"{i}. **{r.get('author','Аноним')}** ({r.get('rating','—')}★, {r.get('date','')}) — {text} [👍{r.get('likes',0)} 👎{r.get('dislikes',0)}]")
@@ -88,14 +92,17 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
         result = await scraper.scrape(url)
         shop = result["shop"]
         reviews = result["reviews"]
-        total = shop.get("total_reviews") or 0
-        if total and total > 100 and len(reviews) < total * 0.6 and len(reviews) < 600:
-            raise ValueError(f"Неполная выгрузка: {len(reviews)}/{total} — Яндекс отдал только часть отзывов, попробуйте позже")
 
-        # Сохраняем в БД
+        # Сохраняем в БД даже если выгрузка частичная — лучше частичные данные, чем ничего
         await db.upsert_shop(shop)
         await db.upsert_reviews(oid, reviews)
-        await db.log_finish(log_id, reviews_found=len(reviews), status="ok")
+        total = shop.get("total_reviews") or 0
+        is_partial = bool(total and total > 20 and len(reviews) < total * 0.9 and len(reviews) < total)
+        status = "partial" if is_partial else "ok"
+        await db.log_finish(log_id, reviews_found=len(reviews), status=status)
+        if is_partial:
+            logger.warning(f"Частичная выгрузка {oid}: {len(reviews)}/{total}")
+            shop["_partial_warning"] = f"⚠️ Скачано {len(reviews)} из {total} — Яндекс отдал не всё"
     except Exception as e:
         try:
             await db.log_finish(log_id, reviews_found=0, status="error", error=str(e))
@@ -187,8 +194,6 @@ def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
         except Exception as e:
             errors.append(f"{u}: {e}")
             shop_rows.append({"Ссылка": u, "Магазин": "", "OID": "", "Отзывов": 0, "Статус": f"Ошибка: {e}"})
-        # Пауза 2-5с между магазинами (уважение к Яндексу)
-        import time, random
         time.sleep(random.uniform(2, 3))
 
     # Общий отчёт Excel
@@ -219,12 +224,12 @@ def handle_monitor_add(url: str, interval_hours: int):
         db = get_db()
         async def _add():
             await db.init()
-            # Убедимся что магазин есть в БД (скачаем шапку если нет)
             shop = await db.get_shop(oid)
             if not shop:
                 scraper = YandexScraper(headless=True)
                 result = await scraper.scrape(url.strip())
                 await db.upsert_shop(result["shop"])
+                await db.upsert_reviews(oid, result["reviews"])
             await db.add_monitor(oid, interval_hours=int(interval_hours))
             return oid
         oid2 = asyncio.run(_add())

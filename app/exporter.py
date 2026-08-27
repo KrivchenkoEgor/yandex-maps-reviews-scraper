@@ -9,6 +9,7 @@ Excel-структура из AGENTS.md:
 
 import csv
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -62,12 +63,10 @@ def _stats_sheet(reviews: list[dict[str, Any]]) -> pd.DataFrame:
     total = len(reviews)
     ratings = [r.get("rating") for r in reviews if isinstance(r.get("rating"), int)]
     cnt = Counter(ratings)
-    # тренд по месяцам
     months = Counter()
     for r in reviews:
         d = r.get("date") or ""
-        # ожидаем YYYY-MM-DD
-        if len(d) >= 7:
+        if re.match(r"^\d{4}-\d{2}", d):
             months[d[:7]] += 1
 
     # топ позитив/негатив по длине текста

@@ -373,21 +373,26 @@ def _get_photos(card: Tag) -> list[str]:
 
 
 def _is_verified(card: Tag) -> bool:
-    text = card.get_text()
-    if "Проверен" in text or "проверен" in text.lower():
-        return True
     for sel in SELECTORS["verified"]:
         if ":has-text" in sel:
+            # проверяем точный бейдж, а не любой текст карточки
+            if "Проверенный" in sel:
+                for el in card.select("[class*='badge'], [data-testid*='verified'], [class*='verified']"):
+                    if "Проверенный" in el.get_text():
+                        return True
             continue
         try:
-            if card.select_one(sel):
+            el = card.select_one(sel)
+            if el and "Проверенный" in el.get_text():
+                return True
+            if el and sel.strip().startswith("[data-testid='verified"):
                 return True
         except Exception:
             continue
     return False
 
 
-def parse_review_card(card: Tag) -> dict[str, Any]:
+def parse_review_card(card: Tag, shop_oid: str = "") -> dict[str, Any]:
     """
     Разобрать одну карточку отзыва (BeautifulSoup Tag) в dict.
 
@@ -398,13 +403,11 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
     if not review_id:
         import hashlib
         raw = "|".join([
+            shop_oid or "",
             _get_text(_find_first(card, SELECTORS["text"])),
             _get_text(_find_first(card, SELECTORS["author"])),
             _get_text(_find_first(card, SELECTORS["date"])),
             str(_get_rating(_find_first(card, SELECTORS["rating"])) or ""),
-            str(_get_likes(_find_first(card, SELECTORS["likes"])) or 0),
-            str(_get_dislikes(_find_first(card, SELECTORS["dislikes"])) or 0),
-            str(len(_get_photos(card))),
         ])
         review_id = hashlib.md5(raw.encode()).hexdigest()[:12] if raw.strip("|") else ""
 
@@ -446,7 +449,7 @@ def parse_review_card(card: Tag) -> dict[str, Any]:
     }
 
 
-def parse_reviews_html(html: str) -> list[dict[str, Any]]:
+def parse_reviews_html(html: str, shop_oid: str = "") -> list[dict[str, Any]]:
     """
     Разобрать HTML страницы отзывов (после скролла) → список отзывов.
 
@@ -458,7 +461,7 @@ def parse_reviews_html(html: str) -> list[dict[str, Any]]:
     reviews = []
     for card in cards:
         try:
-            r = parse_review_card(card)
+            r = parse_review_card(card, shop_oid=shop_oid)
             # Фильтруем пустые карточки без текста и автора
             if r["text"] or r["author"] != "Аноним":
                 reviews.append(r)
@@ -522,7 +525,7 @@ if __name__ == "__main__":
         <span class="business-review-view__body-text">Отличный магазин, свежие продукты!</span>
         <span class="business-review-view__likes-count">12</span>
         <span>Проверенный отзыв</span>
-        <img src="https://example.com/photo.jpg" class="business-review-view__photo">
+        <img src="https://avatars.mds.yandex.net/get-altay/123/photo.jpg" class="business-review-view__photo">
         <div class="business-review-view__reply">
             <span class="business-review-view__reply-text">Спасибо за отзыв!</span>
             <span class="business-review-view__reply-date">вчера</span>
@@ -538,7 +541,7 @@ if __name__ == "__main__":
     assert r["likes"] == 12, r
     assert r["is_verified"] is True, r
     assert "Отличный магазин" in r["text"], r
-    assert r["photos"] == ["https://example.com/photo.jpg"], r
+    assert r["photos"] == ["https://avatars.mds.yandex.net/get-altay/123/photo.jpg"], r
     assert r["owner_response"]["text"] == "Спасибо за отзыв!", r
     print("✅ parse_reviews_html OK")
     print("Все тесты review_parser прошли!")

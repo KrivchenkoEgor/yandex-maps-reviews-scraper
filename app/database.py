@@ -167,45 +167,102 @@ class Database:
     # -- reviews --
 
     async def upsert_reviews(self, shop_oid: str, reviews: list[dict]) -> int:
-        """Вставить отзывы (игнорирует дубликаты по review_id). Возвращает кол-во вставленных."""
+        """Вставить отзывы с мержем по полноте (обновляет существующие). Возвращает кол-во изменённых."""
         if not reviews:
             return 0
         now = datetime.now().isoformat()
-        rows = []
-        for r in reviews:
-            rows.append((
-                r.get("review_id"),
-                shop_oid,
-                r.get("author"),
-                r.get("rating"),
-                r.get("date"),
-                r.get("text"),
-                json.dumps(r.get("photos", []), ensure_ascii=False),
-                json.dumps(r.get("owner_response"), ensure_ascii=False) if r.get("owner_response") else None,
-                r.get("likes", 0),
-                r.get("dislikes", 0),
-                1 if r.get("is_verified") else 0,
-                now,
-            ))
+        changed = 0
         async with aiosqlite.connect(self.path) as db:
-            inserted = 0
-            for row in rows:
-                try:
-                    cursor = await db.execute(
-                        """INSERT OR IGNORE INTO reviews
-                           (review_id,shop_oid,author,rating,date,text,photos,owner_response,likes,dislikes,is_verified,scraped_at)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", row)
-                    if cursor.rowcount > 0:
-                        inserted += 1
-                except Exception as e:
-                    logger.warning(f"Не удалось вставить отзыв {row[0]}: {e}")
+            db.row_factory = aiosqlite.Row
+            for r in reviews:
+                rid = r.get("review_id")
+                if not rid:
+                    continue
+                # читаем существующий
+                async with db.execute("SELECT * FROM reviews WHERE review_id=?", (rid,)) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    # вставка нового
+                    try:
+                        await db.execute(
+                            """INSERT INTO reviews
+                               (review_id,shop_oid,author,rating,date,text,photos,owner_response,likes,dislikes,is_verified,scraped_at)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (
+                                rid, shop_oid, r.get("author"), r.get("rating"), r.get("date"),
+                                r.get("text"), json.dumps(r.get("photos", []), ensure_ascii=False),
+                                json.dumps(r.get("owner_response"), ensure_ascii=False) if r.get("owner_response") else None,
+                                r.get("likes", 0), r.get("dislikes", 0), 1 if r.get("is_verified") else 0, now,
+                            ),
+                        )
+                        changed += 1
+                    except Exception as e:
+                        logger.warning(f"Не удалось вставить отзыв {rid}: {e}")
+                else:
+                    # мерж: оставляем более полные поля
+                    existing = dict(row)
+                    try:
+                        ex_photos = json.loads(existing["photos"]) if existing["photos"] else []
+                    except Exception:
+                        ex_photos = []
+                    new_photos = r.get("photos") or []
+                    # выбор лучших значений
+                    new_text = r.get("text") or ""
+                    ex_text = existing["text"] or ""
+                    merged_text = new_text if len(new_text) > len(ex_text) else ex_text
+                    merged_photos = new_photos if len(new_photos) > len(ex_photos) else ex_photos
+                    merged_owner = r.get("owner_response") or (json.loads(existing["owner_response"]) if existing["owner_response"] else None)
+                    # если старый None а новый есть — берём новый, иначе старый
+                    if not existing["owner_response"] and r.get("owner_response"):
+                        merged_owner = r.get("owner_response")
+                    else:
+                        try:
+                            merged_owner = json.loads(existing["owner_response"]) if existing["owner_response"] else r.get("owner_response")
+                            if r.get("owner_response") and not existing["owner_response"]:
+                                merged_owner = r.get("owner_response")
+                        except Exception:
+                            merged_owner = r.get("owner_response") or None
+                    # лайки/дизлайки — максимум
+                    merged_likes = max(int(existing["likes"] or 0), int(r.get("likes") or 0))
+                    merged_dislikes = max(int(existing["dislikes"] or 0), int(r.get("dislikes") or 0))
+                    merged_verified = 1 if (existing["is_verified"] or r.get("is_verified")) else 0
+                    # автор/дата/рейтинг — если у существующего пусто а новое заполнено
+                    merged_author = existing["author"] if existing["author"] and existing["author"] != "Аноним" else r.get("author") or existing["author"]
+                    merged_rating = existing["rating"] if existing["rating"] is not None else r.get("rating")
+                    merged_date = existing["date"] if existing["date"] else r.get("date")
+                    # проверяем что хоть что-то меняется
+                    needs_update = (
+                        merged_text != ex_text
+                        or len(merged_photos) != len(ex_photos)
+                        or merged_likes != (existing["likes"] or 0)
+                        or merged_dislikes != (existing["dislikes"] or 0)
+                        or merged_verified != (existing["is_verified"] or 0)
+                        or (bool(r.get("owner_response")) and not existing["owner_response"])
+                    )
+                    if needs_update:
+                        await db.execute(
+                            """UPDATE reviews SET
+                               text=?, photos=?, owner_response=?, likes=?, dislikes=?, is_verified=?,
+                               author=?, rating=?, date=?, scraped_at=?
+                               WHERE review_id=?""",
+                            (
+                                merged_text, json.dumps(merged_photos, ensure_ascii=False),
+                                json.dumps(merged_owner, ensure_ascii=False) if merged_owner else None,
+                                merged_likes, merged_dislikes, merged_verified,
+                                merged_author, merged_rating, merged_date, now, rid,
+                            ),
+                        )
+                        changed += 1
             await db.commit()
-            return inserted
+            return changed
 
     async def get_reviews(self, shop_oid: str) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM reviews WHERE shop_oid=? ORDER BY date DESC", (shop_oid,)) as cur:
+            async with db.execute(
+                "SELECT * FROM reviews WHERE shop_oid=? ORDER BY CASE WHEN date GLOB '[0-9][0-9][0-9][0-9]-*' THEN date ELSE '' END DESC, date DESC",
+                (shop_oid,),
+            ) as cur:
                 rows = await cur.fetchall()
                 out = []
                 for r in rows:

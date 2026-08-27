@@ -134,13 +134,6 @@ def extract_oid(url: str) -> Optional[str]:
     if m:
         return m.group(1)
 
-    # 5. Крайний фолбэк: любое длинное число 8-16 цифр в пути (организация)
-    m = re.search(r"/(\d{8,16})(?:/|$)", parsed.path)
-    if m:
-        cand = m.group(1)
-        # исключаем z/l порты типа 17, 10.32 — уже отфильтровано длиной
-        return cand
-
     return None
 
 
