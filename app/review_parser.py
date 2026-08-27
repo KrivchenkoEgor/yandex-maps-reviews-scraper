@@ -373,17 +373,15 @@ def _get_photos(card: Tag) -> list[str]:
 
 
 def _is_verified(card: Tag) -> bool:
+    # точная фраза бейджа, а не любое "проверен" в тексте отзыва
+    if card.find(string=lambda t: t and "Проверенный отзыв" in t):
+        return True
     for sel in SELECTORS["verified"]:
         if ":has-text" in sel:
-            # проверяем точный бейдж, а не любой текст карточки
-            if "Проверенный" in sel:
-                for el in card.select("[class*='badge'], [data-testid*='verified'], [class*='verified']"):
-                    if "Проверенный" in el.get_text():
-                        return True
             continue
         try:
             el = card.select_one(sel)
-            if el and "Проверенный" in el.get_text():
+            if el and "Проверенный отзыв" in el.get_text():
                 return True
             if el and sel.strip().startswith("[data-testid='verified"):
                 return True
