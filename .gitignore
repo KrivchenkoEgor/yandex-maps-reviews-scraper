@@ -66,6 +66,10 @@ REPORT*.md
 # Артефакты артефактов
 artifacts/
 
+# Тестовые скриншоты UI и артефакты Playwright MCP
+/*.png
+.playwright-mcp/
+
 # Кэш
 .cache/
 .pytest_cache/
