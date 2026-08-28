@@ -20,7 +20,9 @@ import pandas as pd
 from loguru import logger
 
 from app import __git_url__, __version__, config
-from app.database import get_db
+from app import auth
+from app.auth import AuthError
+from app.database import Database, get_db
 from app.exporter import export_csv, export_excel, export_json, excel_date_sort_key, to_excel_date
 from app.url_resolver import resolve_yandex_url
 from app.yandex_scraper import YandexScraper
@@ -28,6 +30,23 @@ from app.yandex_scraper import YandexScraper
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
+
+def _user_db(user: dict[str, Any] | None) -> Database | None:
+    """Личная БД вошедшего пользователя (None → общая, для API-совместимости)."""
+    if not user:
+        return None
+    return Database(auth.user_db_path(user["user_id"]))
+
+
+def _user_out_dir(user: dict[str, Any] | None) -> str | None:
+    """Личная папка экспортов пользователя."""
+    if not user:
+        return None
+    return str(Path(config.OUTPUT_DIR) / "users" / str(user["user_id"]))
+
+
+_LOGIN_HINT = "⚠️ Сначала войдите на вкладке «Аккаунт» — регистрация занимает минуту."
+_LOGIN_TABLE = pd.DataFrame([{"Сообщение": "Войдите на вкладке «Аккаунт», чтобы видеть подписки"}])
 
 def _fmt_preview(shop: dict[str, Any], reviews: list[dict[str, Any]]) -> str:
     if not shop:
@@ -54,8 +73,9 @@ def _fmt_preview(shop: dict[str, Any], reviews: list[dict[str, Any]]) -> str:
 # Обработчики
 # ---------------------------------------------------------------------------
 
-async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Скачать один магазин с кэшем 24ч (логика из AGENTS.md)."""
+async def _scrape_one(url: str, progress_cb=None, db=None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Скачать один магазин с кэшем 24ч (логика из AGENTS.md).
+    db — куда сохранять; по умолчанию общая БД, у вошедшего пользователя — его личная."""
     url = url.strip()
     if not url:
         raise ValueError("Вставьте ссылку на магазин с Яндекс.Карт")
@@ -65,7 +85,7 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
     if not oid:
         raise ValueError("Не удалось извлечь OID. Убедитесь что ссылка ведёт на карточку магазина (с poi).")
 
-    db = get_db()
+    db = db or get_db()
     await db.init()
 
     # Кэш 24ч — если свежо, берём из БД, но проверяем полноту выгрузки
@@ -113,19 +133,23 @@ async def _scrape_one(url: str, progress_cb=None) -> tuple[dict[str, Any], list[
     return shop, reviews
 
 
-def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
+def handle_single(url: str, user: dict[str, Any] | None, progress=gr.Progress(track_tqdm=True)):
     """Gradio-обработчик одиночного режима (синхронная обёртка)."""
+    if not user:
+        return (_LOGIN_HINT, gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=False), gr.update(visible=False))
     progress(0, desc="Разрешаю ссылку...")
     try:
-        shop, reviews = asyncio.run(_scrape_one(url, progress_cb=lambda m: progress(0.5, desc=m)))
+        shop, reviews = asyncio.run(_scrape_one(
+            url, progress_cb=lambda m: progress(0.5, desc=m), db=_user_db(user)))
     except Exception as e:
         logger.error(f"Ошибка одиночного: {e}")
         return (
             f"❌ Ошибка: {e}",
-            gr.update(value=None, visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value=None, visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
         )
 
     preview = _fmt_preview(shop, reviews)
@@ -134,10 +158,11 @@ def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
         for r in reviews[:5]
     ])
 
+    out_dir = _user_out_dir(user)
     try:
-        p_xlsx = export_excel(shop, reviews)
-        p_csv = export_csv(shop, reviews)
-        p_json = export_json(shop, reviews)
+        p_xlsx = export_excel(shop, reviews, out_dir=out_dir)
+        p_csv = export_csv(shop, reviews, out_dir=out_dir)
+        p_json = export_json(shop, reviews, out_dir=out_dir)
     except Exception as e:
         logger.error(f"Ошибка экспорта: {e}")
         p_xlsx = p_csv = p_json = None
@@ -151,8 +176,10 @@ def handle_single(url: str, progress=gr.Progress(track_tqdm=True)):
     )
 
 
-def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
+def handle_batch(file, user: dict[str, Any] | None, progress=gr.Progress(track_tqdm=True)):
     """Пакетный: Excel со списком ссылок (колонка 'Ссылка' или первая колонка)."""
+    if not user:
+        return _LOGIN_HINT, gr.update(visible=False)
     if file is None:
         return "Загрузите Excel/CSV со списком ссылок", gr.update(visible=False)
 
@@ -186,7 +213,7 @@ def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
     for i, u in enumerate(urls, 1):
         progress(i / len(urls), desc=f"Обрабатываю {i}/{len(urls)}: {u[:40]}...")
         try:
-            shop, reviews = asyncio.run(_scrape_one(u))
+            shop, reviews = asyncio.run(_scrape_one(u, db=_user_db(user)))
             for r in reviews:
                 row = {"Магазин": shop.get("name"), "OID": shop.get("oid"), "Ссылка": u, **{f"Отзыв_{k}": v for k, v in r.items() if k in ("author","rating","date","text","likes","dislikes","is_verified")}}
                 all_reviews.append(row)
@@ -207,7 +234,7 @@ def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
         )
         df_out["Отзыв_date"] = df_out["Отзыв_date"].map(to_excel_date)
     df_shops = pd.DataFrame(shop_rows)
-    out_dir = Path(config.OUTPUT_DIR)
+    out_dir = Path(_user_out_dir(user))
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"batch_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx"
     with pd.ExcelWriter(out_path, engine="openpyxl") as w:
@@ -225,8 +252,10 @@ def handle_batch(file, progress=gr.Progress(track_tqdm=True)):
     return msg, gr.update(value=str(out_path), visible=True)
 
 
-def handle_monitor_add(url: str, interval_hours: int):
-    """Добавить магазин в мониторинг."""
+def handle_monitor_add(url: str, interval_hours: int, user: dict[str, Any] | None):
+    """Добавить магазин в мониторинг (в личную БД пользователя)."""
+    if not user:
+        return _LOGIN_HINT
     if not url.strip():
         return "Вставьте ссылку"
     try:
@@ -234,7 +263,7 @@ def handle_monitor_add(url: str, interval_hours: int):
         oid = resolved["oid"]
         if not oid:
             return "❌ Не удалось извлечь OID из ссылки"
-        db = get_db()
+        db = _user_db(user)
         async def _add():
             await db.init()
             shop = await db.get_shop(oid)
@@ -251,9 +280,11 @@ def handle_monitor_add(url: str, interval_hours: int):
         return f"❌ Ошибка: {e}"
 
 
-def handle_monitor_list():
-    """Список подписок."""
-    db = get_db()
+def handle_monitor_list(user: dict[str, Any] | None):
+    """Список подписок текущего пользователя из его личной БД."""
+    if not user:
+        return _LOGIN_TABLE
+    db = _user_db(user)
     async def _list():
         await db.init()
         ms = await db.list_monitors(active_only=False)
@@ -270,6 +301,69 @@ def handle_monitor_list():
             })
         return pd.DataFrame(rows) if rows else pd.DataFrame([{"Сообщение": "Подписок нет — добавьте ссылку выше"}])
     return asyncio.run(_list())
+
+
+# ---------------------------------------------------------------------------
+# Аккаунт: регистрация, подтверждение кодом, вход, выход
+# ---------------------------------------------------------------------------
+
+def handle_register(email: str, password: str):
+    """Создать аккаунт и отправить код подтверждения."""
+    try:
+        u = auth.register_user(email, password)
+        return (f"✅ Аккаунт создан для **{u['email']}**. Код подтверждения отправлен "
+                f"(при локальной работе он лежит в logs/outbox/{u['email']}.txt). "
+                f"Введите код ниже, чтобы активировать вход.")
+    except AuthError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        logger.error(f"Регистрация: {e}")
+        return f"❌ Ошибка: {e}"
+
+
+def handle_resend(email: str):
+    """Выслать новый код подтверждения."""
+    try:
+        auth.resend_code(email)
+        return "✅ Новый код отправлен — проверьте письмо/outbox"
+    except AuthError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        return f"❌ Ошибка: {e}"
+
+
+def handle_confirm(email: str, code: str):
+    """Подтвердить email кодом."""
+    try:
+        auth.confirm_email(email, code)
+        return "✅ Email подтверждён — теперь войдите с паролем в форме справа"
+    except AuthError as e:
+        return f"❌ {e}"
+    except Exception as e:
+        return f"❌ Ошибка: {e}"
+
+
+def handle_login(email: str, password: str):
+    """Войти. Обновляет сессию, приветствие и таблицу подписок."""
+    try:
+        user = auth.login_user(email, password)
+    except AuthError as e:
+        return None, f"❌ {e}", _LOGIN_TABLE
+    except Exception as e:
+        logger.error(f"Вход: {e}")
+        return None, f"❌ Ошибка: {e}", _LOGIN_TABLE
+    return (
+        user,
+        f"✅ Вы вошли как **{user['email']}** — данные и подписки теперь ваши личные",
+        handle_monitor_list(user),
+    )
+
+
+def handle_logout(user: dict[str, Any] | None):
+    """Выйти из сессии."""
+    if not user:
+        return None, "Вы и так не вошли", _LOGIN_TABLE
+    return None, f"Вы вышли из аккаунта {user['email']}", _LOGIN_TABLE
 
 
 # ---------------------------------------------------------------------------
@@ -432,11 +526,42 @@ def build_ui() -> gr.Blocks:
         font_mono=["ui-monospace", "SF Mono", "Menlo", "Consolas", "monospace"],
     )
     with gr.Blocks(title="Yandex Reviews Scraper", theme=theme, css=_APP_CSS) as demo:
+        # Сессия текущей вкладки браузера: dict пользователя или None
+        user_state = gr.State(None)
+
         gr.Markdown(
             "# Yandex Reviews Scraper\n"
-            "Отзывы с Яндекс.Карт в один клик: вставьте ссылку — получите Excel, CSV или JSON.",
+            "Отзывы с Яндекс.Карт в один клик: вставьте ссылку — получите Excel, CSV или JSON. "
+            "У каждого пользователя свои данные и подписки.",
             elem_classes=["app-hero"],
         )
+
+        with gr.Tab("Аккаунт"):
+            gr.Markdown("Зарегистрируйтесь с email и паролем, подтвердите email кодом — и работайте со своими данными отдельно от других.")
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### Регистрация")
+                    reg_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
+                    reg_pwd = gr.Textbox(label="Пароль (от 6 символов)", type="password")
+                    reg_btn = gr.Button("Зарегистрироваться", variant="primary")
+                    reg_msg = gr.Markdown()
+                    gr.Markdown("Не пришёл код? Вышлем снова.")
+                    res_email = gr.Textbox(label="Email для повторной отправки", placeholder="ivan@example.com")
+                    res_btn = gr.Button("Выслать код ещё раз", variant="secondary")
+                    res_msg = gr.Markdown()
+                    gr.Markdown("### Подтверждение кодом")
+                    conf_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
+                    conf_code = gr.Textbox(label="Код из письма (6 цифр)", placeholder="123456", max_lines=1)
+                    conf_btn = gr.Button("Подтвердить email", variant="primary")
+                    conf_msg = gr.Markdown()
+                with gr.Column():
+                    gr.Markdown("### Вход")
+                    login_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
+                    login_pwd = gr.Textbox(label="Пароль", type="password")
+                    login_btn = gr.Button("Войти", variant="primary")
+                    login_msg = gr.Markdown()
+                    user_info = gr.Markdown("Вы не вошли — скачивание и мониторинг недоступны.")
+                    logout_btn = gr.Button("Выйти", variant="secondary")
 
         with gr.Tab("Скачивание"):
             inp = gr.Textbox(label="Ссылка на магазин", placeholder="https://yandex.ru/maps/-/CTwsUYyk  или полная с poi[uri]=ymapsbm1://org?oid=...", lines=2)
@@ -454,23 +579,12 @@ def build_ui() -> gr.Blocks:
                 dl_json = gr.File(label="JSON", visible=False)
             gr.Markdown("Кэш 24 часа: повторный запрос в течение суток вернёт данные из базы без обращения к Яндексу. При капче сервис попросит подождать.")
 
-            # minimal — один компактный индикатор прогресса вместо оверлея
-            # на каждом выходном компоненте (иначе прогресс-бар дублируется)
-            btn.click(
-                handle_single,
-                inputs=[inp],
-                outputs=[preview_md, preview_df, dl_xlsx, dl_csv, dl_json],
-                show_progress="minimal",
-            )
-
         with gr.Tab("Пакетная обработка"):
             gr.Markdown("Загрузите Excel или CSV с колонкой **Ссылка** (или первой колонкой). Магазины обрабатываются по очереди, с паузой 2–5 секунд.")
             batch_file = gr.File(label="Excel/CSV со ссылками", file_types=[".xlsx",".xls",".csv"])
             batch_btn = gr.Button("Запустить обработку", variant="primary")
             batch_msg = gr.Markdown()
             batch_out = gr.File(label="Общий отчёт (Excel)", visible=False)
-
-            batch_btn.click(handle_batch, inputs=[batch_file], outputs=[batch_msg, batch_out], show_progress="minimal")
 
         with gr.Tab("Мониторинг"):
             gr.Markdown("Подписка на магазин: проверка новых отзывов по интервалу — день или неделя. Новое попадает в базу, дубликаты по review_id игнорируются.")
@@ -485,10 +599,6 @@ def build_ui() -> gr.Blocks:
             )
             mon_refresh = gr.Button("Обновить список", variant="secondary")
 
-            mon_add.click(handle_monitor_add, inputs=[mon_url, mon_interval], outputs=[mon_status])
-            mon_refresh.click(handle_monitor_list, outputs=[mon_table])
-            demo.load(handle_monitor_list, outputs=[mon_table])
-
         gr.Markdown(
             f"<div>"
             f"v{__version__} • <a href='{__git_url__}' target='_blank'>GitHub</a> • "
@@ -496,6 +606,36 @@ def build_ui() -> gr.Blocks:
             f"</div>",
             elem_classes=["app-footer"],
         )
+
+        # ------------------------------------------------------------------
+        # Проводка событий (после объявления всех компонентов)
+        # ------------------------------------------------------------------
+        # Аккаунт
+        reg_btn.click(handle_register, inputs=[reg_email, reg_pwd], outputs=[reg_msg])
+        res_btn.click(handle_resend, inputs=[res_email], outputs=[res_msg])
+        conf_btn.click(handle_confirm, inputs=[conf_email, conf_code], outputs=[conf_msg])
+        login_btn.click(handle_login, inputs=[login_email, login_pwd],
+                        outputs=[user_state, login_msg, mon_table])
+        logout_btn.click(handle_logout, inputs=[user_state],
+                         outputs=[user_state, login_msg, mon_table])
+
+        # Скачивание — minimal: один индикатор прогресса вместо оверлея на каждом выходе
+        btn.click(
+            handle_single,
+            inputs=[inp, user_state],
+            outputs=[preview_md, preview_df, dl_xlsx, dl_csv, dl_json],
+            show_progress="minimal",
+        )
+
+        # Пакетная обработка
+        batch_btn.click(handle_batch, inputs=[batch_file, user_state],
+                        outputs=[batch_msg, batch_out], show_progress="minimal")
+
+        # Мониторинг
+        mon_add.click(handle_monitor_add, inputs=[mon_url, mon_interval, user_state],
+                      outputs=[mon_status])
+        mon_refresh.click(handle_monitor_list, inputs=[user_state], outputs=[mon_table])
+        demo.load(handle_monitor_list, inputs=[user_state], outputs=[mon_table])
 
     return demo
 

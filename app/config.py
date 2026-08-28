@@ -46,6 +46,19 @@ YANDEX_MAX_SCROLL_ATTEMPTS = _int("YANDEX_MAX_SCROLL_ATTEMPTS", 5)
 DATABASE_PATH = os.getenv("DATABASE_PATH", "db/ya_ot.db")
 SHOP_CACHE_TTL_HOURS = _int("SHOP_CACHE_TTL_HOURS", 24)
 
+# --- Многопользовательский режим ---
+# db/users/users.db — реестр аккаунтов; db/users/uid_<id>/ya_ot.db — БД пользователя
+USER_DATA_DIR = os.getenv("USER_DATA_DIR", "db/users")
+MAIL_BACKEND = os.getenv("MAIL_BACKEND", "console")  # console | smtp
+OUTBOX_DIR = os.getenv("OUTBOX_DIR", "logs/outbox")
+CONFIRM_CODE_TTL_HOURS = _int("CONFIRM_CODE_TTL_HOURS", 24)
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = _int("SMTP_PORT", 587)
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "yandex-reviews-scraper@localhost")
+SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
+
 # --- Приложение ---
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = _int("APP_PORT", 8000)

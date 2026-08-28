@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
     await db.init()
     logger.info(f"БД готова: {db.path}")
 
+    # Реестр пользователей (многопользовательский режим)
+    try:
+        from app.auth import init_registry
+        logger.info(f"Реестр пользователей: {init_registry()}")
+    except Exception as e:
+        logger.warning(f"Реестр пользователей не создан: {e}")
+
     # Фоновый мониторинг (как в monitor.py)
     global _monitor_task, _stop_event
     _stop_event = asyncio.Event()
@@ -104,18 +111,28 @@ async def api_resolve(url: str):
 @app.post("/api/scrape")
 async def api_scrape(payload: dict):
     """
-    POST {"url": "https://yandex.ru/maps/-/CTwsUYyk"}
-    Возвращает shop + reviews, пишет в кэш и на диск (Excel/CSV/JSON).
+    POST {"url": "https://yandex.ru/maps/-/CTwsUYyk", "user_token": "необязательно"}
+    Без токена — общая БД как раньше; с токеном пользователя — его личная БД
+    и его папка экспортов.
     """
     url = (payload.get("url") or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Поле 'url' обязательно")
+    user = None
+    token = str(payload.get("user_token") or "")
+    if token:
+        from app.auth import get_user_by_token
+        user = get_user_by_token(token)
+        if not user:
+            raise HTTPException(status_code=401, detail="Неверный user_token")
     try:
-        shop, reviews = await _scrape_one(url)
+        from app.ui import _user_db, _user_out_dir
+        shop, reviews = await _scrape_one(url, db=_user_db(user))
         # Экспорты (опционально, но делаем для API тоже)
-        p_xlsx = export_excel(shop, reviews)
-        p_csv = export_csv(shop, reviews)
-        p_json = export_json(shop, reviews)
+        out = _user_out_dir(user)
+        p_xlsx = export_excel(shop, reviews, out_dir=out)
+        p_csv = export_csv(shop, reviews, out_dir=out)
+        p_json = export_json(shop, reviews, out_dir=out)
         return {
             "shop": shop,
             "reviews": reviews,

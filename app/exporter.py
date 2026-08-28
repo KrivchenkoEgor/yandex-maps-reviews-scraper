@@ -24,8 +24,8 @@ from app import config
 # Хелперы
 # ---------------------------------------------------------------------------
 
-def _ensure_output_dir() -> Path:
-    p = Path(config.OUTPUT_DIR)
+def _ensure_output_dir(out_dir: str | Path | None = None) -> Path:
+    p = Path(out_dir) if out_dir else Path(config.OUTPUT_DIR)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -141,18 +141,18 @@ def _shop_sheet(shop: dict[str, Any]) -> pd.DataFrame:
 # Публичные API
 # ---------------------------------------------------------------------------
 
-def export_excel(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None) -> Path:
+def export_excel(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None, out_dir: str | Path | None = None) -> Path:
     """
     Экспорт в Excel с 3 листами, форматированием и автофильтрами.
     Возвращает путь к файлу.
     """
-    out_dir = _ensure_output_dir()
+    outp = _ensure_output_dir(out_dir)
     base = _safe_filename(shop.get("name") or shop.get("oid") or "shop")
     if filename is None:
         filename = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     if not filename.endswith(".xlsx"):
         filename += ".xlsx"
-    path = out_dir / filename
+    path = outp / filename
 
     # Отзывы — от самой новой даты к самой старой
     reviews_sorted = _reviews_sorted_newest_first(reviews)
@@ -215,28 +215,28 @@ def export_excel(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: 
     return path
 
 
-def export_csv(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None) -> Path:
-    out_dir = _ensure_output_dir()
+def export_csv(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None, out_dir: str | Path | None = None) -> Path:
+    outp = _ensure_output_dir(out_dir)
     base = _safe_filename(shop.get("name") or shop.get("oid") or "shop")
     if filename is None:
         filename = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     if not filename.endswith(".csv"):
         filename += ".csv"
-    path = out_dir / filename
+    path = outp / filename
     df = _reviews_to_df(reviews)
     df.to_csv(path, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_MINIMAL)
     logger.info(f"CSV сохранён: {path}")
     return path
 
 
-def export_json(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None) -> Path:
-    out_dir = _ensure_output_dir()
+def export_json(shop: dict[str, Any], reviews: list[dict[str, Any]], filename: str | None = None, out_dir: str | Path | None = None) -> Path:
+    outp = _ensure_output_dir(out_dir)
     base = _safe_filename(shop.get("name") or shop.get("oid") or "shop")
     if filename is None:
         filename = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
     if not filename.endswith(".json"):
         filename += ".json"
-    path = out_dir / filename
+    path = outp / filename
     payload = {
         "shop": {
             "oid": shop.get("oid"),
