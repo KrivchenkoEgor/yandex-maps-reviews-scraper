@@ -319,6 +319,11 @@ def handle_register(email: str, password: str):
             gr.update(value=u["email"]),  # email подставлен
         )
     except AuthError as e:
+        # аккаунт создан, но письмо не ушло (dev-режим/нет Postfix) — шаг 2 открываем:
+        # код можно взять из logs/outbox или выслать заново кнопкой ниже
+        pending = auth.get_unverified_user(email)
+        if pending:
+            return (f"⚠️ {e}", gr.update(visible=True), gr.update(value=pending["email"]))
         return f"❌ {e}", gr.update(), gr.update()
     except Exception as e:
         logger.error(f"Регистрация: {e}")
