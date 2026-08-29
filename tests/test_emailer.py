@@ -36,6 +36,13 @@ class FakeSMTP:
 FakeSMTP.failures = 0
 
 
+@pytest.fixture(autouse=True)
+def mail_enabled(monkeypatch):
+    """Тесты не зависят от локального .env: отправка в тестах всегда включена
+    (кроме test_disabled_falls_back_to_outbox, который выключает сам)."""
+    monkeypatch.setattr(config, "MAIL_ENABLED", True)
+
+
 @pytest.fixture
 def fake_smtp(monkeypatch):
     FakeSMTP.failures = 0
