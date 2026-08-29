@@ -312,9 +312,13 @@ def handle_register(email: str, password: str):
     """Создать аккаунт и показать шаг 2 — ввод кода (email подставим сами)."""
     try:
         u = auth.register_user(email, password)
+        # Текст зависит от режима: в бою письмо ушло почтой, в dev лежит в outbox
+        if config.MAIL_ENABLED:
+            note = "Код отправлен на почту — проверьте входящие и папку «Спам»."
+        else:
+            note = f"Отправка писем выключена (dev-режим): код лежит в logs/outbox/{u['email']}.txt."
         return (
-            f"✅ Аккаунт создан для **{u['email']}**. Код отправлен — при локальной работе "
-            f"он в файле logs/outbox/{u['email']}.txt. Введите код ниже, чтобы завершить.",
+            f"✅ Аккаунт создан для **{u['email']}**. {note} Введите код ниже, чтобы завершить.",
             gr.update(visible=True),   # шаг 2: подтверждение
             gr.update(value=u["email"]),  # email подставлен
         )
