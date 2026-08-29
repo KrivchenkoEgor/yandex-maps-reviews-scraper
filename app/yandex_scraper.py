@@ -525,12 +525,27 @@ class YandexScraper:
                 break
             if len(collected) >= max_reviews_limit:
                 break
-            # Плавный скролл списка отзывов (не телепорт — см. _scroll_reviews_list);
-            # strong — при простое: длинная серия колеса над списком раскачивает пагинацию
+            # Человечный скролл + мышь — ПРОВЕРЕННАЯ логика (стабильные 600),
+            # откат 2026-08-29: моя «плавная» прокрутка без телепорта ко дну
+            # собирала только 100-250; телепорт триггерит пагинацию в норме
             try:
-                await self._scroll_reviews_list(page, strong=(empty_iters >= 2))
+                # 2-3 колёсика с рандомом
+                for _ in range(random.randint(2, 4)):
+                    await page.mouse.wheel(0, random.randint(350, 750))
+                    await asyncio.sleep(random.uniform(0.4, 0.9))
+                    if random.random() < 0.5:
+                        try:
+                            await human_mouse_move(page)
+                        except Exception: pass
+                # Скролл контейнера (телепорт ко дну — триггер следующей страницы)
+                await page.evaluate("""() => {
+                    const els=document.querySelectorAll('div[class*=\"scroll\"]');
+                    let best=null,maxH=0;
+                    for(const el of els){ if(el.scrollHeight>el.clientHeight && el.scrollHeight>maxH){maxH=el.scrollHeight; best=el;}}
+                    if(best) best.scrollTop=best.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
+                }""")
                 # Ховер на случайную карточку
-                if random.random() < 0.4:
+                if random.random() < 0.6:
                     try:
                         cards = await page.query_selector_all("div.business-review-view")
                         if cards:
@@ -721,10 +736,29 @@ class YandexScraper:
         logger.info(f"Скролл-контейнер: {scroll_target}")
 
         for attempt in range(max_attempts):
-            # Плавный скролл списка (та же причина, что и в _fetch_via_api:
-            # телепорт ко дну не триггерит подгрузку — нужны реальные события)
+            # Прежняя проверенная прокрутка DOM-пути (откат 2026-08-29)
             try:
-                await self._scroll_reviews_list(page, strong=(empty_iters >= 2))
+                for _ in range(random.randint(3, 5)):
+                    dy = random.randint(300, 700)
+                    if scroll_target == "body":
+                        await page.mouse.wheel(0, dy)
+                    else:
+                        await page.evaluate("""({sel, dy}) => {
+                            const el = document.querySelector(sel);
+                            if (el) el.scrollBy(0, dy);
+                            else window.scrollBy(0, dy);
+                        }""", {"sel": scroll_target, "dy": dy})
+                    await asyncio.sleep(random.uniform(0.3, 0.8))
+                    if random.random() < 0.4:
+                        try: await human_mouse_move(page)
+                        except Exception: pass
+                if scroll_target == "body":
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                else:
+                    await page.evaluate("""({sel}) => {
+                        const el = document.querySelector(sel);
+                        if (el) el.scrollTo(0, el.scrollHeight);
+                    }""", {"sel": scroll_target})
             except Exception as e:
                 logger.warning(f"Скролл ошибка: {e}")
             pause = max(random.uniform(cfg.min_delay_sec, cfg.max_delay_sec), cfg.scroll_pause_sec)
