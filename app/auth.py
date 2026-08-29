@@ -187,7 +187,8 @@ def confirm_email(email: str, code: str) -> None:
 
 
 def get_user_by_token(token: str) -> Optional[dict[str, Any]]:
-    """Найти подтверждённого пользователя по API-токену (для /api/scrape)."""
+    """Найти подтверждённого пользователя по API-токену (для /api/scrape).
+    Возвращает ту же форму, что и login_user: {user_id, email, api_token}."""
     if not token:
         return None
     init_registry()
@@ -197,7 +198,9 @@ def get_user_by_token(token: str) -> Optional[dict[str, Any]]:
         row = con.execute(
             "SELECT * FROM users WHERE api_token=? AND is_verified=1", (str(token),)
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        return {"user_id": row["id"], "email": row["email"], "api_token": row["api_token"]}
     finally:
         con.close()
 
