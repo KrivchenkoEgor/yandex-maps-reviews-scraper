@@ -353,17 +353,18 @@ def handle_login(email: str, password: str):
         user = auth.login_user(email, password)
     except AuthError as e:
         return (None, f"❌ {e}", "Вы не вошли — скачивание и мониторинг недоступны.",
-                gr.update(visible=True), gr.update(visible=False), _LOGIN_TABLE)
+                gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), _LOGIN_TABLE)
     except Exception as e:
         logger.error(f"Вход: {e}")
         return (None, f"❌ Ошибка: {e}", "Вы не вошли — скачивание и мониторинг недоступны.",
-                gr.update(visible=True), gr.update(visible=False), _LOGIN_TABLE)
+                gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), _LOGIN_TABLE)
     return (
         user,
         "",
         f"Вы вошли как **{user['email']}** — данные и подписки теперь ваши личные.",
         gr.update(visible=False),  # формы входа/регистрации
-        gr.update(visible=True),   # карточка аккаунта
+        gr.update(visible=True),   # панель сессии
+        gr.update(visible=True),   # рабочие вкладки
         handle_monitor_list(user),
     )
 
@@ -375,8 +376,9 @@ def handle_logout(user: dict[str, Any] | None):
         None,
         f"Вы вышли из аккаунта {email}." if email else "",
         "Вы не вошли — скачивание и мониторинг недоступны.",
-        gr.update(visible=True),
-        gr.update(visible=False),
+        gr.update(visible=True),   # формы входа/регистрации
+        gr.update(visible=False),  # панель сессии
+        gr.update(visible=False),  # рабочие вкладки
         _LOGIN_TABLE,
         gr.update(visible=False),  # спрятать блок подтверждения
     )
@@ -409,8 +411,8 @@ body { background: #f5f5f7 !important; }
 }
 .app-hero p { font-size: 17px !important; color: #6e6e73 !important; margin: 10px auto 0 !important; max-width: 640px !important; line-height: 1.5 !important; }
 
-/* --- Табы: большая белая карточка + сегмент-контрол --- */
-.tabs {
+/* --- Рабочие вкладки: большая белая карточка (только после входа) --- */
+#work-tabs {
   background: #ffffff !important;
   border: none !important;
   border-radius: 20px !important;
@@ -446,7 +448,7 @@ body { background: #f5f5f7 !important; }
 /* --- Блоки внутри карточки: без рамок, воздух --- */
 .block { border: none !important; background: transparent !important; box-shadow: none !important; }
 .block.padded { padding: 6px 2px !important; }
-.tabs .form { background: transparent !important; border: none !important; box-shadow: none !important; }
+.form { background: transparent !important; border: none !important; box-shadow: none !important; }
 [data-testid="block-info"] {
   font-size: 13px !important; font-weight: 600 !important; color: #6e6e73 !important;
   margin-bottom: 7px !important; letter-spacing: 0.01em !important;
@@ -515,15 +517,15 @@ input::placeholder, textarea::placeholder { color: #a1a1a6 !important; }
 #auth-tabs .tab-nav { margin: 4px auto 16px !important; padding: 2px !important; }
 #auth-tabs .tab-nav button { padding: 6px 26px !important; font-size: 14px !important; }
 
-/* --- Группы-карточки (формы, подписки, форма скачивания) --- */
-.tabs .gr-group, .tabs .gr-group .styler {
-  background: #fbfbfd !important;
-}
-.tabs .gr-group {
+/* --- Группы-карточки (экран входа, формы, подписки) --- */
+.gr-group, .gr-group .styler { background: #ffffff !important; }
+.gr-group {
   border: 1px solid #ececf0 !important;
-  border-radius: 16px !important;
-  padding: 16px 22px !important;
+  border-radius: 20px !important;
+  padding: 18px 24px !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05) !important;
 }
+#auth-card { max-width: 560px !important; margin: 24px auto 0 !important; }
 
 /* --- Строка «поле + кнопка» --- */
 .scrape-row { align-items: flex-end !important; gap: 12px !important; }
@@ -531,13 +533,13 @@ input::placeholder, textarea::placeholder { color: #a1a1a6 !important; }
 .hint-line { color: #86868b !important; font-size: 13px !important; margin: 2px 0 0 !important; }
 
 /* --- Таблицы (превью, подписки) --- */
-.tabs table { border-collapse: collapse !important; font-size: 15px !important; }
-.tabs th {
+#work-tabs table { border-collapse: collapse !important; font-size: 15px !important; }
+#work-tabs th {
   font-weight: 600 !important; color: #6e6e73 !important; font-size: 12px !important;
   text-transform: uppercase !important; letter-spacing: 0.04em !important;
   border-bottom: 1px solid #e8e8ed !important; background: transparent !important;
 }
-.tabs td { border-bottom: 1px solid #f0f0f2 !important; color: #1d1d1f !important; }
+#work-tabs td { border-bottom: 1px solid #f0f0f2 !important; color: #1d1d1f !important; }
 
 /* --- Файлы и загрузка --- */
 [data-testid="file"], .file-preview {
@@ -592,78 +594,79 @@ def build_ui() -> gr.Blocks:
             elem_classes=["how-wrap"],
         )
 
-        with gr.Tab("Аккаунт"):
-            # Прогрессивное раскрытие: пока не вошли — формы (вкладки Регистрация/Вход),
-            # после входа — карточка аккаунта. Подтверждение кодом показываем только
-            # после успешной регистрации (email подставляется автоматически).
-            with gr.Group(visible=True) as auth_area:
-                with gr.Column(elem_classes=["auth-col"]):
-                    with gr.Tabs(elem_id="auth-tabs"):
-                        with gr.Tab("Регистрация"):
-                            reg_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
-                            reg_pwd = gr.Textbox(label="Пароль (от 6 символов)", type="password")
-                            reg_btn = gr.Button("Зарегистрироваться", variant="primary")
-                            reg_msg = gr.Markdown()
-                            with gr.Group(visible=False) as conf_group:
-                                gr.Markdown("**Шаг 2.** Введите код из письма — он уже отправлен.")
-                                conf_email = gr.Textbox(label="Email (подставлен автоматически)")
-                                conf_code = gr.Textbox(label="Код из письма (6 цифр)", placeholder="123456", max_lines=1)
-                                conf_btn = gr.Button("Подтвердить email", variant="primary")
-                                conf_msg = gr.Markdown()
-                                res_btn = gr.Button("Не пришёл код — выслать ещё раз", variant="secondary", size="sm")
-                                res_msg = gr.Markdown()
-                        with gr.Tab("Вход"):
-                            login_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
-                            login_pwd = gr.Textbox(label="Пароль", type="password")
-                            login_btn = gr.Button("Войти", variant="primary")
-                            login_msg = gr.Markdown()
-            with gr.Group(visible=False) as user_area:
-                with gr.Column(elem_classes=["auth-col"]):
-                    user_info = gr.Markdown()
-                    logout_btn = gr.Button("Выйти", variant="secondary")
+        # Экран входа/регистрации — единственное, что видно до авторизации
+        with gr.Group(visible=True, elem_id="auth-card") as auth_area:
+            with gr.Column(elem_classes=["auth-col"]):
+                with gr.Tabs(elem_id="auth-tabs"):
+                    with gr.Tab("Регистрация"):
+                        reg_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
+                        reg_pwd = gr.Textbox(label="Пароль (от 6 символов)", type="password")
+                        reg_btn = gr.Button("Зарегистрироваться", variant="primary")
+                        reg_msg = gr.Markdown()
+                        with gr.Group(visible=False) as conf_group:
+                            gr.Markdown("**Шаг 2.** Введите код из письма — он уже отправлен.")
+                            conf_email = gr.Textbox(label="Email (подставлен автоматически)")
+                            conf_code = gr.Textbox(label="Код из письма (6 цифр)", placeholder="123456", max_lines=1)
+                            conf_btn = gr.Button("Подтвердить email", variant="primary")
+                            conf_msg = gr.Markdown()
+                            res_btn = gr.Button("Не пришёл код — выслать ещё раз", variant="secondary", size="sm")
+                            res_msg = gr.Markdown()
+                    with gr.Tab("Вход"):
+                        login_email = gr.Textbox(label="Email", placeholder="ivan@example.com")
+                        login_pwd = gr.Textbox(label="Пароль", type="password")
+                        login_btn = gr.Button("Войти", variant="primary")
+                        login_msg = gr.Markdown()
 
-        with gr.Tab("Скачивание"):
-            with gr.Group():
-                with gr.Row(elem_classes=["scrape-row"]):
-                    inp = gr.Textbox(
-                        label="Ссылка на магазин", scale=4,
-                        placeholder="https://yandex.ru/maps/-/CTwsUYyk  или полная с poi[uri]=ymapsbm1://org?oid=...",
-                    )
-                    btn = gr.Button("Скачать", variant="primary", scale=1)
-                gr.Markdown("Кэш 24 часа: повторный запрос вернёт данные из базы без обращения к Яндексу.", elem_classes=["hint-line"])
-            preview_md = gr.Markdown()
-            preview_df = gr.Dataframe(
-                label="Превью (5 отзывов)", interactive=False,
-                headers=["Автор", "Оценка", "Дата", "Текст", "👍", "👎"],
-                col_count=6,
-                visible=False,
-            )
-            with gr.Row():
-                dl_xlsx = gr.File(label="Excel (3 листа)", visible=False)
-                dl_csv = gr.File(label="CSV", visible=False)
-                dl_json = gr.File(label="JSON", visible=False)
+        # Панель сессии — вместо форм после входа
+        with gr.Group(visible=False) as user_area:
+            with gr.Row(elem_classes=["session-row"]):
+                user_info = gr.Markdown()
+                logout_btn = gr.Button("Выйти", variant="secondary", size="sm", scale=0)
 
-        with gr.Tab("Пакетная обработка"):
-            gr.Markdown("Excel или CSV с колонкой **Ссылка** (или первой колонкой). Магазины обрабатываются по очереди, с паузой 2–5 секунд.")
-            batch_file = gr.File(label="Файл со ссылками", file_types=[".xlsx",".xls",".csv"])
-            batch_btn = gr.Button("Запустить обработку", variant="primary")
-            batch_msg = gr.Markdown()
-            batch_out = gr.File(label="Общий отчёт (Excel)", visible=False)
+        # Рабочие вкладки — только для вошедших
+        with gr.Tabs(visible=False, elem_id="work-tabs") as work_tabs:
+            with gr.Tab("Скачивание"):
+                with gr.Group():
+                    with gr.Row(elem_classes=["scrape-row"]):
+                        inp = gr.Textbox(
+                            label="Ссылка на магазин", scale=4,
+                            placeholder="https://yandex.ru/maps/-/CTwsUYyk  или полная с poi[uri]=ymapsbm1://org?oid=...",
+                        )
+                        btn = gr.Button("Скачать", variant="primary", scale=1)
+                    gr.Markdown("Кэш 24 часа: повторный запрос вернёт данные из базы без обращения к Яндексу.", elem_classes=["hint-line"])
+                preview_md = gr.Markdown()
+                preview_df = gr.Dataframe(
+                    label="Превью (5 отзывов)", interactive=False,
+                    headers=["Автор", "Оценка", "Дата", "Текст", "👍", "👎"],
+                    col_count=6,
+                    visible=False,
+                )
+                with gr.Row():
+                    dl_xlsx = gr.File(label="Excel (3 листа)", visible=False)
+                    dl_csv = gr.File(label="CSV", visible=False)
+                    dl_json = gr.File(label="JSON", visible=False)
 
-        with gr.Tab("Мониторинг"):
-            with gr.Group():
-                gr.Markdown("**Новая подписка** — проверка новых отзывов раз в день или неделю.")
-                with gr.Row(elem_classes=["mon-row"]):
-                    mon_url = gr.Textbox(label="Ссылка на магазин", placeholder="https://yandex.ru/maps/-/CTwsUYyk", scale=3)
-                    mon_interval = gr.Radio(choices=[("День", 24), ("Неделя", 168)], value=24, label="Интервал", scale=1)
-                mon_add = gr.Button("Добавить в мониторинг", variant="primary")
-            mon_status = gr.Markdown()
-            gr.Markdown("**Мои подписки**")
-            mon_table = gr.Dataframe(
-                interactive=False,
-                headers=["ID", "Магазин", "OID", "Интервал ч", "Последняя проверка", "Активна"],
-            )
-            mon_refresh = gr.Button("Обновить список", variant="secondary", size="sm")
+            with gr.Tab("Пакетная обработка"):
+                gr.Markdown("Excel или CSV с колонкой **Ссылка** (или первой колонкой). Магазины обрабатываются по очереди, с паузой 2–5 секунд.")
+                batch_file = gr.File(label="Файл со ссылками", file_types=[".xlsx",".xls",".csv"])
+                batch_btn = gr.Button("Запустить обработку", variant="primary")
+                batch_msg = gr.Markdown()
+                batch_out = gr.File(label="Общий отчёт (Excel)", visible=False)
+
+            with gr.Tab("Мониторинг"):
+                with gr.Group():
+                    gr.Markdown("**Новая подписка** — проверка новых отзывов раз в день или неделю.")
+                    with gr.Row(elem_classes=["mon-row"]):
+                        mon_url = gr.Textbox(label="Ссылка на магазин", placeholder="https://yandex.ru/maps/-/CTwsUYyk", scale=3)
+                        mon_interval = gr.Radio(choices=[("День", 24), ("Неделя", 168)], value=24, label="Интервал", scale=1)
+                    mon_add = gr.Button("Добавить в мониторинг", variant="primary")
+                mon_status = gr.Markdown()
+                gr.Markdown("**Мои подписки**")
+                mon_table = gr.Dataframe(
+                    interactive=False,
+                    headers=["ID", "Магазин", "OID", "Интервал ч", "Последняя проверка", "Активна"],
+                )
+                mon_refresh = gr.Button("Обновить список", variant="secondary", size="sm")
 
         gr.Markdown(
             f"<div>"
@@ -682,10 +685,11 @@ def build_ui() -> gr.Blocks:
         res_btn.click(handle_resend, inputs=[conf_email], outputs=[res_msg])
         conf_btn.click(handle_confirm, inputs=[conf_email, conf_code], outputs=[conf_msg])
         login_btn.click(handle_login, inputs=[login_email, login_pwd],
-                        outputs=[user_state, login_msg, user_info, auth_area, user_area, mon_table])
+                        outputs=[user_state, login_msg, user_info, auth_area, user_area,
+                                 work_tabs, mon_table])
         logout_btn.click(handle_logout, inputs=[user_state],
                          outputs=[user_state, login_msg, user_info, auth_area, user_area,
-                                  mon_table, conf_group])
+                                  work_tabs, mon_table, conf_group])
 
         # Скачивание — minimal: один индикатор прогресса вместо оверлея на каждом выходе
         btn.click(
