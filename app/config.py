@@ -46,6 +46,21 @@ YANDEX_MAX_SCROLL_ATTEMPTS = _int("YANDEX_MAX_SCROLL_ATTEMPTS", 5)
 DATABASE_PATH = os.getenv("DATABASE_PATH", "db/ya_ot.db")
 SHOP_CACHE_TTL_HOURS = _int("SHOP_CACHE_TTL_HOURS", 24)
 
+# --- Многопользовательский режим ---
+# db/users/users.db — реестр аккаунтов; db/users/uid_<id>/ya_ot.db — БД пользователя
+USER_DATA_DIR = os.getenv("USER_DATA_DIR", "db/users")
+
+# --- Почта (EMAIL_INTEGRATION.md): локальный Postfix, send-only, DKIM на сервере ---
+SMTP_HOST = os.getenv("SMTP_HOST", "127.0.0.1")
+SMTP_PORT = _int("SMTP_PORT", 25)
+SMTP_TIMEOUT_SEC = _int("SMTP_TIMEOUT_SEC", 15)
+MAIL_FROM = os.getenv("MAIL_FROM", "noreply@xn--80aaacg3aje4aocssle9l.xn--p1ai")
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "РаботайОтзывами")
+# false = dev-режим: письмо не отправляется, код пишется в OUTBOX_DIR (для отладки UI)
+MAIL_ENABLED = _bool("MAIL_ENABLED", True)
+OUTBOX_DIR = os.getenv("OUTBOX_DIR", "logs/outbox")
+CONFIRM_CODE_TTL_MIN = _int("CONFIRM_CODE_TTL_MIN", 10)
+
 # --- Приложение ---
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = _int("APP_PORT", 8000)

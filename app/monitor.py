@@ -9,6 +9,7 @@ monitor — фоновый мониторинг подписок на магаз
 """
 
 import asyncio
+import sqlite3
 from datetime import datetime
 from typing import Any
 
@@ -53,10 +54,37 @@ async def check_shop(shop_oid: str, shop_url: str, db: Database | None = None) -
     return {"new_reviews": len(new), "total": len(fresh), "shop": shop, "new_items": new}
 
 
+def _all_user_dbs() -> list[Database]:
+    """Личные БД всех подтверждённых пользователей (реестр db/users/users.db)."""
+    from app import auth
+    from app.auth import registry_path
+    reg = registry_path()
+    if not reg.exists():
+        return []
+    con = sqlite3.connect(reg)
+    try:
+        rows = con.execute("SELECT id FROM users WHERE is_verified=1 ORDER BY id").fetchall()
+    finally:
+        con.close()
+    return [Database(auth.user_db_path(uid)) for (uid,) in rows]
+
+
 async def check_all_monitors() -> list[dict[str, Any]]:
-    """Проверить все активные подписки, у которых истёк интервал."""
-    db = get_db()
-    await db.init()
+    """Проверить активные подписки всех пользователей, у которых истёк интервал.
+
+    У каждого пользователя своя БД — подписки одного не видят другого.
+    Общая БД (db/ya_ot.db) тоже проверяется: там данные старых выгрузок
+    и результаты /api/scrape без токена."""
+    dbs: list[Database] = [get_db()] + _all_user_dbs()
+    results: list[dict[str, Any]] = []
+    for db in dbs:
+        await db.init()
+        results.extend(await _check_one_db(db))
+    return results
+
+
+async def _check_one_db(db: Database) -> list[dict[str, Any]]:
+    """Проверить подписки в одной БД (общей или чьей-то личной)."""
     monitors = await db.list_monitors(active_only=True)
     results: list[dict[str, Any]] = []
     for m in monitors:
